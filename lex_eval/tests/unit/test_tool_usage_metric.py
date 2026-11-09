@@ -218,3 +218,54 @@ class TestHaltedRunsAreNotScoredForMissingTools:
         metric.measure(_case(sequence))
         assert metric.score == 1.0
         assert metric.is_successful()
+
+
+_DEFINITIONS = "Worker: find_definitions"
+_MADE_UNDER = "Worker: find_instruments_made_under"
+
+
+def _score(sequence, chat_mode="research"):
+    from lex_eval.testcase import LLMTestCase, ToolCall
+
+    case = LLMTestCase(
+        input="q",
+        actual_output="a",
+        tools_called=[
+            ToolCall(name=t, input_parameters={}, output="x") for t in sequence
+        ],
+    )
+    metric = ToolUsageMetric(tool_sequence=sequence, chat_mode=chat_mode)
+    metric.measure(case)
+    return metric
+
+
+def test_made_under_alone_finds_and_reads():
+    """A made-under question answered from the record alone, the shape of
+    the v2026.11.1 conversational runs on Q13."""
+    metric = _score([_DELEGATE, _MADE_UNDER], chat_mode="conversational")
+    assert metric.score == 1.0, metric.reason
+    assert "find_instruments_made_under" in metric.reason
+
+
+def test_definitions_then_sections_in_a_deep_research_step_passes():
+    """find_definitions is the step's discovery, so the section searches
+    after it have their prerequisite."""
+    sequence = [_DELEGATE, _DEFINITIONS, _SECTIONS, _SECTIONS, _DELEGATE, _DEFINITIONS]
+    metric = _score(sequence, chat_mode="deep_research")
+    assert metric.score == 1.0, metric.reason
+
+
+def test_a_record_tool_after_sections_is_a_loop_back_in_research_mode():
+    """The record tools are discovery for the order check, so the single-shot
+    no-revisit rule treats them exactly as it treats search_legislation."""
+    ok, detail = _check_tool_order(
+        [_DELEGATE, _SEARCH, _SECTIONS, _DEFINITIONS], "legislation_only"
+    )
+    assert not ok
+    assert "find_definitions called again" in detail
+
+
+def test_missing_reading_step_is_still_missed():
+    metric = _score([_DELEGATE, _SEARCH])
+    assert metric.score < 1.0
+    assert "read the legislation: ✗" in metric.reason

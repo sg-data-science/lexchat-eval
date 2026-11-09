@@ -2,8 +2,10 @@
 Test that every captured response used all required legislation tools *and*
 invoked them in the correct phase order.
 
-Presence, 1/3 per required tool (delegate_research, Worker: search_legislation,
-Worker: search_legislation_sections).
+Presence, 1/3 per required step: delegated research, found the legislation
+(search_legislation, find_definitions or find_instruments_made_under) and read
+it (search_legislation_sections, find_definitions or
+find_instruments_made_under).
 
 Order (legislation_only only), Worker tools must appear in the phase order
 mandated by the Worker system prompt, and must not loop back to an earlier
@@ -14,9 +16,9 @@ phase once a later one has begun:
     3. Worker: get_legislation_text        (Phase 3, FALLBACK, optional)
 
 Score:
-    - 1.0  all three required tools present AND correct order
-    - 0.5  all three required tools present BUT wrong order
-    - <1.0 one or more required tools missing (proportional)
+    - 1.0  all three required steps present AND correct order
+    - 0.5  all three required steps present BUT wrong order
+    - <1.0 one or more required steps missing (proportional)
 
 Passes only when score == 1.0.
 """
@@ -49,15 +51,16 @@ def _tools_list(test_case):
 )
 def test_tool_usage(request, record):
     """
-    All three required tools must be invoked, in the correct order:
+    All three required steps must be present (delegated research, found the
+    legislation, read it), with the Worker tools in the correct order:
 
-        delegate_research, Worker: search_legislation,
-        Worker: search_legislation_sections,
+        Worker: search_legislation (or find_definitions /
+        find_instruments_made_under), Worker: search_legislation_sections,
         Worker: get_legislation_text (optional fallback)
 
-    Score = 1.0 only when all three required tools are present AND the Worker
+    Score = 1.0 only when all three required steps are present AND the Worker
     tools appear in the expected phase order. Wrong order caps the score at
-    0.5 (fail). Missing tools score proportionally (fail).
+    0.5 (fail). Missing steps score proportionally (fail).
     """
     test_case = record_to_test_case(record)
     research_mode = record.get("research_mode", "legislation_only")

@@ -2,10 +2,17 @@
 Custom metric to validate that the LLM used all expected legislation tools
 *and* invoked them in the correct phase order.
 
-Presence scoring, 1/3 for each of the three required tools:
-    - delegate_research
-    - Worker: search_legislation
-    - Worker: search_legislation_sections
+Presence scoring, 1/3 for each of three required steps, each met by any tool
+in its set:
+    - delegated research: delegate_research
+    - found the legislation: search_legislation, find_definitions or
+      find_instruments_made_under
+    - read the legislation: search_legislation_sections, find_definitions or
+      find_instruments_made_under
+
+The two record tools count for both finding and reading because each returns
+the words the answer relies on: a definitions search quotes the defining words,
+and the made-under record reads each instrument's own preamble.
 
 Order scoring (legislation_only mode only), the Worker tools must appear in
 the phase order mandated by the Worker system prompt
@@ -14,6 +21,9 @@ the phase order mandated by the Worker system prompt
     1. Worker: search_legislation          (Phase 1, DISCOVER)
     2. Worker: search_legislation_sections (Phase 2, RETRIEVE PROVISIONS)
     3. Worker: get_legislation_text        (Phase 3, FALLBACK, optional)
+
+find_definitions and find_instruments_made_under are Phase 1 tools for the
+order check, as LexChat itself treats find_definitions as a discovery search.
 
 A response must not only start the phases in this order, it must not loop
 back to an earlier phase once a later one has begun. For example, calling
@@ -45,9 +55,9 @@ a violation, since the top-level presence score only checks the whole run,
 not each step.
 
 Final score:
-    - 1.0  all three required tools present AND correct order
-    - 0.5  all three required tools present BUT wrong order
-    - <1.0 one or more required tools missing (proportional; order is reported
+    - 1.0  all three required steps present AND correct order
+    - 0.5  all three required steps present BUT wrong order
+    - <1.0 one or more required steps missing (proportional; order is reported
            for transparency but does not cap the score further)
 """
 
@@ -55,14 +65,22 @@ from .base import BaseMetric
 from ..testcase import LLMTestCase
 from typing import List, Optional, Set
 
-# The three tools that must all be present for a full score
-REQUIRED_TOOLS: list[str] = [
-    "delegate_research",
-    "Worker: search_legislation",
-    "Worker: search_legislation_sections",
-]
+_DEFINITIONS = "Worker: find_definitions"
+_MADE_UNDER = "Worker: find_instruments_made_under"
 
-PER_TOOL_SCORE = round(1 / len(REQUIRED_TOOLS), 10)
+# The three steps that must all be present for a full score, each met by any
+# one of its tools.
+REQUIRED_STEPS: list[tuple[str, tuple[str, ...]]] = [
+    ("delegated research", ("delegate_research",)),
+    (
+        "found the legislation",
+        ("Worker: search_legislation", _DEFINITIONS, _MADE_UNDER),
+    ),
+    (
+        "read the legislation",
+        ("Worker: search_legislation_sections", _DEFINITIONS, _MADE_UNDER),
+    ),
+]
 
 # Expected invocation order of Worker legislation tools, per the Worker system
 # prompt phases. `get_legislation_text` is the optional fallback (Phase 3) and
@@ -81,14 +99,25 @@ EXPECTED_TOOL_ORDER: list[str] = [
     "Worker: get_legislation_text",
 ]
 
-# Score assigned when all required tools are present but invoked out of order.
+# Tools that take a phase's place in the order check.
+_PHASE_OF: dict[str, str] = {
+    _DEFINITIONS: "Worker: search_legislation",
+    _MADE_UNDER: "Worker: search_legislation",
+}
+
+# Score assigned when all required steps are present but invoked out of order.
 ORDER_VIOLATION_SCORE = 0.5
 
 
-def _first_occurrence(tool_sequence: List[str], name: str) -> Optional[int]:
-    """Return the index of the first occurrence of *name* in *tool_sequence*, or None."""
+def _phase(tool: str) -> str:
+    """The phase in ``EXPECTED_TOOL_ORDER`` that *tool* belongs to."""
+    return _PHASE_OF.get(tool, tool)
+
+
+def _first_occurrence(tool_sequence: List[str], phase: str) -> Optional[int]:
+    """Index of the first tool in *tool_sequence* belonging to *phase*, or None."""
     for i, t in enumerate(tool_sequence):
-        if t == name:
+        if _phase(t) == phase:
             return i
     return None
 
@@ -132,19 +161,20 @@ def _check_first_occurrence_order(
     when a later phase is present but an earlier one it depends on is not.
 
     Returns ``(order_ok, detail, present)`` where *present* is the list of
-    ``(short_name, index)`` pairs for tools that appeared at all, reusable by
-    a stricter caller that also wants to check for revisits.
+    ``(short_name, index)`` pairs for the first tool of each phase that
+    appeared at all, reusable by a stricter caller that also wants to check
+    for revisits.
     """
     present: list[tuple[str, int]] = []
     present_names: set[str] = set()
     for name in EXPECTED_TOOL_ORDER:
         idx = _first_occurrence(worker_seq, name)
         if idx is not None:
-            present.append((name.replace("Worker: ", ""), idx))
+            present.append((worker_seq[idx].replace("Worker: ", ""), idx))
             present_names.add(name)
 
     if require_prerequisites and present:
-        last_phase = max(EXPECTED_TOOL_ORDER.index(f"Worker: {n}") for n, _ in present)
+        last_phase = max(EXPECTED_TOOL_ORDER.index(n) for n in present_names)
         missing = [
             EXPECTED_TOOL_ORDER[i].replace("Worker: ", "")
             for i in range(last_phase)
@@ -231,12 +261,13 @@ def _check_tool_order(
     for i in range(len(present) - 1):
         earlier_name, _ = present[i]
         later_name, later_idx = present[i + 1]
-        earlier_full = f"Worker: {earlier_name}"
+        earlier_phase = _phase(f"Worker: {earlier_name}")
         for j in range(later_idx + 1, len(worker_seq)):
-            if worker_seq[j] == earlier_full:
+            if _phase(worker_seq[j]) == earlier_phase:
                 return False, (
-                    f"{earlier_name} called again at step {j + 1} after "
-                    f"{later_name} had already started (step {later_idx + 1})"
+                    f"{worker_seq[j].replace('Worker: ', '')} called again at "
+                    f"step {j + 1} after {later_name} had already started "
+                    f"(step {later_idx + 1})"
                 )
 
     return True, " → ".join(name for name, _ in present)
@@ -244,19 +275,19 @@ def _check_tool_order(
 
 class ToolUsageMetric(BaseMetric):
     """
-    Scores tool usage by awarding 1/3 for each required tool present, and
+    Scores tool usage by awarding 1/3 for each required step present, and
     (for ``legislation_only`` mode) additionally validates that the Worker
     tools were invoked in the correct phase order and that the Worker never
     looped back to an earlier phase after a later one had begun.
 
     Score:
-        - 1.0  all three required tools present AND correct order
-        - 0.5  all three required tools present BUT wrong order
-        - <1.0 one or more required tools missing (proportional; order is
+        - 1.0  all three required steps present AND correct order
+        - 0.5  all three required steps present BUT wrong order
+        - <1.0 one or more required steps missing (proportional; order is
                reported for transparency but does not cap the score further)
 
     Passes when ``score >= threshold`` (default threshold 1.0), so any order
-    violation or missing tool is a fail.
+    violation or missing step is a fail.
 
     Args:
         threshold: Minimum score to pass (default 1.0).
@@ -319,10 +350,16 @@ class ToolUsageMetric(BaseMetric):
             self.reason = f"Case-law tools: delegated research {delegated}; searched or opened a judgment {researched}."
             return self.score
 
-        present = [t for t in REQUIRED_TOOLS if t in tools_used]
-        missing = [t for t in REQUIRED_TOOLS if t not in tools_used]
+        # The first tool of each step's list that the run called, so the
+        # reason names the usual tool when the run used it.
+        met = {
+            label: next((t for t in tools if t in tools_used), None)
+            for label, tools in REQUIRED_STEPS
+        }
+        present = [label for label, tool in met.items() if tool]
+        missing = [label for label, tool in met.items() if not tool]
 
-        all_required_present = len(present) == len(REQUIRED_TOOLS)
+        all_required_present = len(present) == len(REQUIRED_STEPS)
 
         # A run LexChat stopped at its tool-call limit did not choose to skip
         # the tool it is missing, so there is no model behaviour here to score.
@@ -338,8 +375,8 @@ class ToolUsageMetric(BaseMetric):
             )
             return self.score
 
-        # --- Presence score (1/3 per required tool) ---
-        presence_score = len(present) / len(REQUIRED_TOOLS)
+        # --- Presence score (1/3 per required step) ---
+        presence_score = len(present) / len(REQUIRED_STEPS)
 
         # --- Order check (legislation_only only, when tool_sequence supplied) ---
         order_ok, order_detail = _check_tool_order(
@@ -356,9 +393,12 @@ class ToolUsageMetric(BaseMetric):
         self.success = self.score >= self.threshold
 
         # --- Reason ---
-        parts = [f"{t}: {'✓' if t in tools_used else '✗'}" for t in REQUIRED_TOOLS]
+        parts = [
+            f"{label}: ✓ {tool.replace('Worker: ', '')}" if tool else f"{label}: ✗"
+            for label, tool in met.items()
+        ]
         self.reason = (
-            f"Score {self.score:.3f} ({len(present)}/{len(REQUIRED_TOOLS)} tools used). "
+            f"Score {self.score:.3f} ({len(present)}/{len(REQUIRED_STEPS)} steps). "
             + " | ".join(parts)
         )
         if missing:

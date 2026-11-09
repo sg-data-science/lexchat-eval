@@ -1013,3 +1013,108 @@ class TestCitationReadNamesTheRoute:
         metric = CitationReadMetric()
         metric.measure(self._case("asp/2010/8", read))
         assert metric.score == 1.0
+
+
+class TestRecordToolsCountAsRetrieval:
+    """An instrument listed by find_definitions or find_instruments_made_under
+    was retrieved, with the words the answer relies on, so citing it is
+    neither fabrication nor citing unread. Measured on the v2026.11.1 gather,
+    where every id Citation Grounding called fabricated on the definitions and
+    made-under questions was in one of these two results."""
+
+    def _definitions(self, *ids):
+        return ToolCall(
+            name="Worker: find_definitions",
+            input_parameters={"term": "shop"},
+            output=json.dumps(
+                {
+                    "tool": "find_definitions",
+                    "count": len(ids),
+                    "definitions": [
+                        {"legislation_id": i, "definition": '"shop" means x'}
+                        for i in ids
+                    ],
+                    "longer_terms": [],
+                }
+            )
+            + "\n\n[SEARCH SCOPE — appended by code][/SEARCH SCOPE]",
+        )
+
+    def _made_under(self, status="found", *ids):
+        return ToolCall(
+            name="Worker: find_instruments_made_under",
+            input_parameters={"act": "asp/2018/9", "section": "95"},
+            output=json.dumps(
+                {
+                    "tool": "find_instruments_made_under",
+                    "status": status,
+                    "act_id": "asp/2018/9",
+                    "count": len(ids),
+                    "instruments": [{"legislation_id": i} for i in ids],
+                }
+            )
+            + "\n\n[ENABLING POWER — the made-under record: ...]",
+        )
+
+    def _case(self, report, *tools):
+        return LLMTestCase(
+            input="q",
+            actual_output="final",
+            tools_called=[
+                ToolCall(name="delegate_research", input_parameters={}, output=report),
+                *tools,
+            ],
+        )
+
+    _REPORT = (
+        "[One](http://www.legislation.gov.uk/id/uksi/1967/907) and "
+        "[Two](https://www.legislation.gov.uk/ssi/2020/351)."
+    )
+
+    def test_listed_instruments_are_grounded_and_read(self):
+        case = self._case(
+            self._REPORT,
+            self._definitions("uksi/1967/907"),
+            self._made_under("found", "SSI/2020/351"),
+        )
+        for metric in (CitationGroundingMetric(), CitationReadMetric()):
+            metric.measure(case)
+            assert metric.score == 1.0, metric.reason
+
+    def test_the_made_under_act_is_retrieved_but_not_read(self):
+        from lex_eval.metrics.structure import (
+            _read_legislation_ids,
+            _retrieved_legislation_ids,
+        )
+
+        tools = [self._made_under("found", "ssi/2020/351")]
+        assert "asp/2018/9" in _retrieved_legislation_ids(tools)
+        assert "asp/2018/9" not in _read_legislation_ids(tools)
+
+    def test_made_under_without_a_found_list_contributes_nothing(self):
+        from lex_eval.metrics.structure import _retrieved_legislation_ids
+
+        tools = [self._made_under("act_not_in_record")]
+        assert _retrieved_legislation_ids(tools) == set()
+        assert not _retrieved_usable_content(tools)
+
+    def test_a_list_is_usable_retrieval_for_genuine_gap(self):
+        assert _retrieved_usable_content([self._definitions("ukpga/1996/18")])
+        assert _retrieved_usable_content([self._made_under("found", "ssi/2020/351")])
+        assert not _retrieved_usable_content([self._definitions()])
+
+        metric = GenuineGapMetric()
+        metric.measure(
+            self._case("A confident answer.", self._definitions("ukpga/1996/18"))
+        )
+        assert metric.score == 1.0, metric.reason
+
+    def test_an_unlisted_citation_still_fails(self):
+        case = self._case(
+            "[X](http://www.legislation.gov.uk/id/asp/1999/99).",
+            self._definitions("uksi/1967/907"),
+        )
+        metric = CitationGroundingMetric()
+        metric.measure(case)
+        assert metric.score == 0.0
+        assert "asp/1999/99" in metric.reason

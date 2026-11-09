@@ -95,7 +95,7 @@ def derive_retrieval(
     """Derive (retrieval_context, case_law_context, fallback_used) from an audit event.
 
     Split out of :func:`audit_capture` so a stored audit event can be re-read
-    without gathering the response again (``db.py --backfill-case-law``).
+    without gathering the response again (``db.py --backfill-retrieval``).
     """
     retrieval_context: List[str] = []
     case_law_context: List[Dict[str, Any]] = []
@@ -141,6 +141,52 @@ def derive_retrieval(
                     ncn = result.get("ncn", "")
                     header = " ".join(p for p in [result.get("title", ""), ncn] if p)
                     retrieval_context.append(f"{header}: {text}" if header else text)
+                continue
+
+            # The two record tools are read from their own result as well. A
+            # definitions search's api_calls hold the 300 raw rows it filtered,
+            # which the model never saw; the made-under record makes no call.
+            if tool_name == "find_definitions":
+                result = _tool_result_json(t) or {}
+                for key in ("definitions", "longer_terms"):
+                    for e in result.get(key) or []:
+                        if not isinstance(e, dict) or not e.get("definition"):
+                            continue
+                        where = " ".join(
+                            p
+                            for p in [e.get("legislation_id"), e.get("provision")]
+                            if p
+                        )
+                        retrieval_context.append(
+                            f"{where}: {e['definition']}" if where else e["definition"]
+                        )
+                continue
+
+            if tool_name == "find_instruments_made_under":
+                result = _tool_result_json(t) or {}
+                if result.get("status") != "found":
+                    continue
+                power = " of ".join(
+                    p for p in [result.get("provision"), result.get("matched_act")] if p
+                )
+                coverage = (result.get("coverage") or {}).get("statement", "")
+                header = (
+                    f"{result.get('count', 0)} instrument(s) whose own preamble "
+                    f"names {power} as a power they were made under."
+                )
+                retrieval_context.append(
+                    f"{header} Coverage: {coverage}" if coverage else header
+                )
+                for inst in result.get("instruments") or []:
+                    if not isinstance(inst, dict):
+                        continue
+                    line = (
+                        f"{inst.get('title', '')} ({inst.get('legislation_id', '')}): "
+                        f"made under {power}"
+                    )
+                    if inst.get("revocation"):
+                        line += f"; {inst['revocation']}"
+                    retrieval_context.append(line)
                 continue
 
             for call in t.get("api_calls", []):

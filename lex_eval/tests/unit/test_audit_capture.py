@@ -918,3 +918,91 @@ class TestDelegationHalts:
         result = audit_capture(_MockClient(lines), "test question", "test-model")
         assert result["delegation_halts"] is None
         assert result["empty_completions"] == 0
+
+
+class TestRecordTools:
+    """find_definitions and find_instruments_made_under feed retrieval_context
+    from their own result, never from the raw rows a definitions search read."""
+
+    DEFINITIONS = {
+        "name": "find_definitions",
+        "args": {"term": "shop"},
+        "raw_result": json.dumps(
+            {
+                "tool": "find_definitions",
+                "term": "shop",
+                "count": 1,
+                "definitions": [
+                    {
+                        "legislation_id": "ukpga/1996/18",
+                        "provision": "section 232",
+                        "definition": '"shop" includes any premises where any retail trade is carried on',
+                    }
+                ],
+                "longer_terms": [
+                    {
+                        "term": "shop worker",
+                        "legislation_id": "ukpga/1996/18",
+                        "provision": "section 232",
+                        "definition": '"shop worker" means an employee who works in a shop',
+                    }
+                ],
+            }
+        ),
+        "api_calls": [
+            {"response": {"results": [{"text": "RAW ROW NEVER SHOWN TO THE MODEL"}]}}
+        ],
+    }
+
+    MADE_UNDER = {
+        "name": "find_instruments_made_under",
+        "args": {"act": "asp/2018/9", "section": "95"},
+        "raw_result": json.dumps(
+            {
+                "tool": "find_instruments_made_under",
+                "status": "found",
+                "act_id": "asp/2018/9",
+                "matched_act": "Social Security (Scotland) Act 2018",
+                "provision": "section/95",
+                "count": 1,
+                "instruments": [
+                    {
+                        "legislation_id": "ssi/2018/275",
+                        "title": "The Social Security Appeals Regulations 2018",
+                        "revocation": "no revocation recorded",
+                    }
+                ],
+                "coverage": {"statement": "SSIs made from 1999 to 2026."},
+            }
+        ),
+        "api_calls": [],
+    }
+
+    def _derive(self, *tools):
+        from lex_eval.utils.audit_capture import derive_retrieval
+
+        return derive_retrieval({"delegations": [{"tools": list(tools)}]})[0]
+
+    def test_definitions_give_their_defining_words(self):
+        ctx = self._derive(self.DEFINITIONS)
+        assert any(
+            "ukpga/1996/18 section 232" in c and "retail trade" in c for c in ctx
+        )
+        assert any('"shop worker" means' in c for c in ctx)
+
+    def test_definitions_raw_rows_are_not_read(self):
+        assert "RAW ROW" not in " ".join(self._derive(self.DEFINITIONS))
+
+    def test_made_under_gives_the_count_coverage_and_each_instrument(self):
+        ctx = " ".join(self._derive(self.MADE_UNDER))
+        assert "1 instrument(s) whose own preamble names section/95" in ctx
+        assert "SSIs made from 1999 to 2026." in ctx
+        assert "(ssi/2018/275): made under section/95 of Social Security" in ctx
+        assert "no revocation recorded" in ctx
+
+    def test_made_under_not_found_gives_nothing(self):
+        tool = copy.deepcopy(self.MADE_UNDER)
+        tool["raw_result"] = json.dumps(
+            {"tool": "find_instruments_made_under", "status": "act_not_in_record"}
+        )
+        assert self._derive(tool) == []

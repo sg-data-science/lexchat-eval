@@ -225,11 +225,60 @@ def _usable_output(output) -> bool:
 
 def _retrieved_usable_content(tools: list) -> bool:
     """True if any ``search_legislation_sections``/``get_legislation_text``
-    call among *tools* returned non-empty output, i.e. retrieval wasn't empty.
+    call among *tools* returned non-empty output, or a definitions or
+    made-under search listed at least one instrument, i.e. retrieval wasn't
+    empty.
     """
     return any(
         tool.name in _TEXT_TOOLS and _usable_output(tool.output) for tool in tools
-    )
+    ) or bool(_record_listed_ids(tools))
+
+
+# LexChat's two record tools. Each lists instruments with the evidence an
+# answer relies on: a definitions search quotes each instrument's defining
+# words, and the made-under record reads each instrument's own preamble naming
+# the enabling section. An instrument they list counts as retrieved and read.
+# Whether a particular claim about it is supported is Claim Support's question.
+_DEFINITIONS_TOOL = "Worker: find_definitions"
+_MADE_UNDER_TOOL = "Worker: find_instruments_made_under"
+
+
+def _record_result(tool) -> dict:
+    """The JSON result of a definitions or made-under call, or {}.
+
+    Only a made-under result with status ``found`` counts: the other statuses
+    list nothing, and two of them say nothing about the law at all.
+    """
+    if tool.name not in (_DEFINITIONS_TOOL, _MADE_UNDER_TOOL):
+        return {}
+    try:
+        raw = tool.output
+        data = _leading_json(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if tool.name == _MADE_UNDER_TOOL and data.get("status") != "found":
+        return {}
+    return data
+
+
+def _record_listed_ids(tools: list) -> set:
+    """Ids of the instruments a definitions or made-under call listed."""
+    ids: set = set()
+    for tool in tools or []:
+        data = _record_result(tool)
+        keys = (
+            ("definitions", "longer_terms")
+            if tool.name == _DEFINITIONS_TOOL
+            else ("instruments",)
+        )
+        for key in keys:
+            for e in data.get(key) or []:
+                lid = e.get("legislation_id") if isinstance(e, dict) else None
+                if lid:
+                    ids.add(lid.lower())
+    return ids
 
 
 class MandatoryStructureMetric(BaseMetric):
@@ -584,8 +633,10 @@ def _retrieved_legislation_ids(tools: list) -> set:
     """
     Return the set of legislation_ids that *tools* actually retrieved:
     results returned by ``search_legislation``, the legislation_id argument
-    passed to ``search_legislation_sections`` / ``get_legislation_text``, and
-    the instruments named in a ``get_legislation_changes`` change record.
+    passed to ``search_legislation_sections`` / ``get_legislation_text``, the
+    instruments named in a ``get_legislation_changes`` change record, and the
+    instruments a definitions or made-under search listed (plus the Act the
+    made-under search was about).
 
     The change record has to count. It is legislation.gov.uk's own record of
     what amends or commences an instrument, so an Act it names was retrieved by
@@ -639,8 +690,12 @@ def _retrieved_legislation_ids(tools: list) -> set:
             lid = params.get("legislation_id")
             if lid:
                 ids.add(lid.lower())
+        elif tool.name == _MADE_UNDER_TOOL:
+            act = _record_result(tool).get("act_id")
+            if act:
+                ids.add(act.lower())
 
-    return ids
+    return ids | _record_listed_ids(tools)
 
 
 def _cited_legislation_ids(report: str) -> set:
@@ -707,7 +762,10 @@ def _read_legislation_ids(tools: list) -> set:
     """
     Return the set of legislation_ids whose *text* was actually read: the
     legislation_id argument of every ``search_legislation_sections`` /
-    ``get_legislation_text`` call among *tools* that returned usable output.
+    ``get_legislation_text`` call among *tools* that returned usable output,
+    and the instruments a definitions or made-under search listed with the
+    words the answer relies on. The Act a made-under search was about is not
+    included: the record holds none of its text.
 
     Narrower than ``_retrieved_legislation_ids`` on purpose. That function
     also counts an Act that merely turned up in a ``search_legislation``
@@ -721,7 +779,7 @@ def _read_legislation_ids(tools: list) -> set:
             lid = (tool.input_parameters or {}).get("legislation_id")
             if lid:
                 ids.add(lid.lower())
-    return ids
+    return ids | _record_listed_ids(tools)
 
 
 def _change_record_ids(tools: list) -> set:
@@ -769,8 +827,8 @@ class CitationGroundingMetric(BaseMetric):
         0.0: no delegate_research call found; citations cannot be verified.
         1.0: no legislation.gov.uk citation URLs in Worker output (nothing
                to falsely ground).
-        0.0: one or more cited Acts were never retrieved by search_legislation,
-               search_legislation_sections, or get_legislation_text in this run.
+        0.0: one or more cited Acts were never retrieved by any of this run's
+               tool calls (see ``_retrieved_legislation_ids``).
         1.0: every cited Act was retrieved by this run.
 
     No partial credit: unlike Reference Links, where "some links survived" is
@@ -828,8 +886,9 @@ class CitationGroundingMetric(BaseMetric):
             self.reason = (
                 f"Fabricated citation(s): {sorted(fabricated)} cited in Worker "
                 "output but never retrieved by search_legislation, "
-                "search_legislation_sections, or get_legislation_text in this run."
-                + broken_note
+                "search_legislation_sections, get_legislation_text, "
+                "get_legislation_changes, find_definitions or "
+                "find_instruments_made_under in this run." + broken_note
             )
         else:
             self.score = 1.0
@@ -852,8 +911,9 @@ class CitationGroundingMetric(BaseMetric):
 class CitationReadMetric(BaseMetric):
     """
     Checks that the Worker actually read every Act it cites: an Act whose text
-    was pulled counts as read, one that only appeared as a title in a
-    search_legislation results list does not.
+    was pulled, or that a definitions or made-under search listed, counts as
+    read; one that only appeared as a title in a search_legislation results
+    list does not.
 
     Catches a report making claims about a real, correctly linked source it
     never opened, e.g. saying an Act "was commenced by" an SI whose text
@@ -1088,8 +1148,9 @@ class GenuineGapMetric(BaseMetric):
     presenting a confident but unsupported answer.
 
     Only applies to ``legislation_only`` mode: the mandated disclosure sentence and
-    the tools this check inspects (search_legislation_sections, get_legislation_text)
-    are specific to legislation retrieval.
+    the tools this check inspects (search_legislation_sections, get_legislation_text,
+    find_definitions, find_instruments_made_under) are specific to legislation
+    retrieval.
 
     In conversational mode the Worker prompt asks for a plain statement of the
     gap and mandates no exact sentence, so a paraphrase scores full marks there

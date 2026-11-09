@@ -33,12 +33,13 @@ and quotes for review, without changing their thresholds.
 
 ## Tool Usage
 
-**Aim.** Checks that a legislation research run actually did the research: called
-`delegate_research`, `search_legislation`, and `search_legislation_sections`, and did so in the right
-phase order. Catches a run that skips straight to an answer, or one that jumps around between
+**Aim.** Checks that a legislation research run actually did the research: delegated it, found the
+legislation, and read it, and did so in the right phase order. Catches a run that skips straight to an answer, or one that jumps around between
 discovery and retrieval instead of following a coherent research process.
 
-**How.** Deterministic, no judge. Presence is worth 1/3 per required tool. For `legislation_only`
+**How.** Deterministic, no judge. Presence is worth 1/3 per required step: `delegate_research`; finding
+the legislation (`search_legislation`, `find_definitions` or `find_instruments_made_under`); reading it
+(`search_legislation_sections`, `find_definitions` or `find_instruments_made_under`). For `legislation_only`
 questions, order is also checked: the first occurrence of each tool must come in the sequence
 discover → retrieve → fallback, and once a later phase has started, the run must not revisit an
 earlier one. A revisit (interleaved re-querying) is reported as an order violation even if the
@@ -67,6 +68,15 @@ prompt makes it mandatory for a question about whether a provision is in force,
 commenced or amended, but nothing in the question set marks which questions
 those are, so requiring it here would fail every other question. It is ignored
 by the order check, so a run that calls it is scored on the rest of its chain.
+
+**The definitions and made-under tools count for finding and for reading.**
+`find_definitions` quotes each instrument's defining words, and
+`find_instruments_made_under` reads each instrument's own preamble naming the
+enabling section, so either result is the evidence the answer relies on. A
+made-under question answered from the record alone is a complete run, not one
+missing two tools. For the order check both are discovery tools, as LexChat
+treats `find_definitions`, so the single-shot no-revisit rule applies to them
+exactly as it does to `search_legislation`.
 
 ## Research Output Structure
 
@@ -126,6 +136,13 @@ responses, all 14 accused ids came from a change record and appeared in no
 other tool output. That is the worst failure this metric can have, because the
 output accuses the model of inventing a source.
 
+**The definitions and made-under lists count as retrieval.** An instrument
+listed by `find_definitions` or `find_instruments_made_under` came from this
+run's own tool call, so citing it is not fabrication; nor is citing the Act a
+made-under search was about. Before they were counted, every id this metric
+called fabricated on the definitions and made-under questions of the first
+build offering them was in one of those two lists.
+
 **Only legislation.gov.uk URLs are read as Act ids.** A judgment link such as
 `caselaw.nationalarchives.gov.uk/uksc/2025/13` would otherwise become Act id `uksc/2025`, which no
 legislation tool call can ever have retrieved, so every case law citation was reported as fabricated.
@@ -149,6 +166,14 @@ set of Acts whose text was retrieved (the `legislation_id` argument of a `search
 or `get_legislation_text` call that returned usable output, not an error). Score is the fraction of
 cited Acts that were read; threshold is 1.0, so a single unread cited Act fails. Case law citations
 are ignored, since there is no legislation retrieval to check them against.
+
+**An instrument listed by `find_definitions` or `find_instruments_made_under`
+counts as read.** Each result carries the words a citation of it relies on: the
+defining words, or the instrument's own preamble naming the enabling section.
+A claim the list cannot support, such as what an instrument made under a
+section goes on to provide, is Claim Support's question, which sees the same
+list. The Act a made-under search was about is not read, since the record holds
+none of its text.
 
 **An Act known only from a change record is not read, and the reason says so.**
 `get_legislation_changes` returns the precise amendment relation, which
@@ -203,7 +228,8 @@ Worker's report says so plainly rather than presenting a confidently unsupported
 to `legislation_only` mode.
 
 **How.** Deterministic, scored per step (a single-shot run has one step). A step whose own tool calls
-returned usable section/full-text content doesn't apply and scores 1.0 for that step. A step whose own
+returned usable section/full-text content, or a definitions or made-under list with at least one
+instrument in it, doesn't apply and scores 1.0 for that step. A step whose own
 retrieval was genuinely empty scores 1.0 if its own report contains the exact mandated disclosure
 sentence, 0.5 if a looser paraphrase is present (e.g. "no relevant", "could not find"), and 0.0 if
 nothing discloses the gap at all. The run's score is the worst step's score, so one step disclosing
@@ -239,7 +265,8 @@ one that fails is it not working. Read this alongside the dashboard's research
 limit column rather than on its own.
 
 **How.** Deterministic. For each step, if its own tool calls returned usable
-`search_legislation_sections`/`get_legislation_text` content but its own report cites none of the Acts
+`search_legislation_sections`/`get_legislation_text` content, or a definitions or made-under list,
+but its own report cites none of the Acts
 that retrieval actually returned (citing a sibling step's Act doesn't count, that step still has nothing
 of its own to show for its retrieval), that step fails. Score is the fraction of steps that pass;
 threshold is 1.0, so a single lost step fails the response.
@@ -431,6 +458,10 @@ quote that doesn't genuinely appear there is downgraded to unsupported, so the j
 own evidence. Score is supported claims divided by scorable claims. Absence claims are counted and
 reported but excluded from the denominator entirely, since nothing can be quoted to prove a law's
 silence on something.
+
+**The retrieved text includes the definitions and made-under lists.** Each defining clause, and each
+instrument the made-under record lists with the record's count and coverage, is part of what the judge
+quotes from, so "37 instruments were made under section 95" can be traced to the list that said so.
 
 **A halted run is not scored.** When LexChat's agent loop hits its ReAct turn cap it returns
 `[Research halted: exceeded N tool-call steps]` in place of a report. Asked to find up to 8 claims in

@@ -2,6 +2,14 @@
 
 import json
 
+# Searches whose result is a list LexChat built in code, counted by its total.
+_RECORD_TOOLS = ("find_definitions", "find_instruments_made_under")
+
+
+def _is_search(name: str) -> bool:
+    """True for a tool the searches panel lists."""
+    return name.startswith("search_") or name in _RECORD_TOOLS
+
 
 def _search_outcome(tool: dict, name: str) -> tuple[int | None, str | None]:
     """How many items a search returned, and any error it reported.
@@ -19,13 +27,20 @@ def _search_outcome(tool: dict, name: str) -> tuple[int | None, str | None]:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
         parsed = None
+    if not error and isinstance(parsed, dict):
+        error = parsed.get("error")
+    if name in _RECORD_TOOLS and isinstance(parsed, dict):
+        # Both state their own total. A made-under result other than "found"
+        # lists nothing, so it reads as empty.
+        if name == "find_instruments_made_under" and parsed.get("status") != "found":
+            return 0, error
+        count = parsed.get("count")
+        return (count if isinstance(count, int) else None), error
     items = (
         parsed
         if name == "search_legislation_sections"
         else parsed.get("results") if isinstance(parsed, dict) else None
     )
-    if not error and isinstance(parsed, dict):
-        error = parsed.get("error")
     return (len(items) if isinstance(items, list) else None), error
 
 
@@ -37,7 +52,7 @@ def searches(record: dict) -> list[dict]:
     for index, step in enumerate(audit.get("delegations", []), 1):
         for tool in step.get("tools", []):
             name = tool.get("name", "")
-            if not name.startswith("search_"):
+            if not _is_search(name):
                 continue
             count, error = _search_outcome(tool, name)
             if error:
