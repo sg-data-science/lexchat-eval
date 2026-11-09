@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,11 @@ VERBOSE_TRUNCATE_CHARS = 500
 # unknown version may have changed a field we depend on rather than added one.
 MIN_AUDIT_SCHEMA_VERSION = 1
 MAX_AUDIT_SCHEMA_VERSION = 6
+
+# The block a code-run text scan appends to a made-under result
+# (LexChat/server_py/src/utils/literal_scan.py::scan_block), which promises
+# no square brackets inside it.
+_TEXT_SCAN = re.compile(r"\[(SEARCH SCOPE — text scan by code:[^\]]*)\]")
 
 
 def _trunc(s: str, n: int = VERBOSE_TRUNCATE_CHARS) -> str:
@@ -187,6 +193,12 @@ def derive_retrieval(
                     if inst.get("revocation"):
                         line += f"; {inst['revocation']}"
                     retrieval_context.append(line)
+                # LexChat's code may also read every listed instrument for a
+                # string the question asks about, appending what it found,
+                # with quoted provisions, to the result the model sees.
+                scan = _TEXT_SCAN.search(t.get("final_result") or "")
+                if scan:
+                    retrieval_context.append(scan.group(1))
                 continue
 
             for call in t.get("api_calls", []):

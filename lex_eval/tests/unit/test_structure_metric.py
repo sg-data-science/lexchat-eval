@@ -691,6 +691,28 @@ class TestGenuineGapAcceptsTheCurrentWording:
         m = self._measure("Section 4 plainly requires consultation.")
         assert m.score == 0.0
 
+    def test_the_current_research_sentence_scores_full(self):
+        m = self._measure(
+            "The material retrieved in this search does not establish the answer."
+        )
+        assert m.score == 1.0
+
+    def test_made_under_coverage_wording_scores_full(self):
+        """The made-under tool tells the Worker an instrument outside the
+        record's coverage was not checked."""
+        m = self._measure(
+            "The record holds no instrument made under section 117. "
+            "Instruments made before 1987 were not checked."
+        )
+        assert m.score == 1.0
+
+    def test_an_empty_made_under_record_said_plainly_passes_in_conversation(self):
+        m = self._measure(
+            "I found no instrument that names section 117 as its power.",
+            chat_mode="conversational",
+        )
+        assert m.score == 1.0
+
 
 class TestLexChatsOwnBlocksAreNotReadAsTheModelsWords:
     """LexChat appends instruction blocks to a Worker report, in code.

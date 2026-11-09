@@ -48,11 +48,12 @@ is checked per plan step instead of per run, and only for first-occurrence
 order, not the no-revisit rule, since a single deep-research step routinely
 covers more than one Act and legitimately interleaves discovery and
 retrieval across them (see ``_check_tool_order`` for the measurement this is
-based on). A step is still required to have called each earlier phase at
-least once before a later one, e.g. a step that goes straight to
-search_legislation_sections with no search_legislation call in that step is
-a violation, since the top-level presence score only checks the whole run,
-not each step.
+based on). A step is still required to have done each earlier phase before
+a later one, in that step or an earlier one, e.g. a first step that goes
+straight to search_legislation_sections with no search_legislation call is a
+violation, since the top-level presence score only checks the whole run, not
+each step. A later step may read what an earlier step found, and a record
+tool counts as both finding and reading.
 
 Final score:
     - 1.0  all three required steps present AND correct order
@@ -114,6 +115,21 @@ def _phase(tool: str) -> str:
     return _PHASE_OF.get(tool, tool)
 
 
+def _phases_done(tool_sequence: List[str]) -> Set[str]:
+    """Phases *tool_sequence* has done. A record tool does both finding and
+    reading, as in ``REQUIRED_STEPS``."""
+    done: Set[str] = set()
+    for t in tool_sequence:
+        if t in (_DEFINITIONS, _MADE_UNDER):
+            done |= {
+                "Worker: search_legislation",
+                "Worker: search_legislation_sections",
+            }
+        else:
+            done.add(_phase(t))
+    return done
+
+
 def _first_occurrence(tool_sequence: List[str], phase: str) -> Optional[int]:
     """Index of the first tool in *tool_sequence* belonging to *phase*, or None."""
     for i, t in enumerate(tool_sequence):
@@ -147,6 +163,7 @@ def _segment_by_delegation(tool_sequence: List[str]) -> List[List[str]]:
 def _check_first_occurrence_order(
     worker_seq: List[str],
     require_prerequisites: bool = False,
+    done_before: Set[str] = frozenset(),
 ) -> tuple[bool, str, list[tuple[str, int]]]:
     """First-occurrence-only order check: each expected tool's first
     appearance must come in phase order. Does not penalise revisiting an
@@ -159,6 +176,9 @@ def _check_first_occurrence_order(
     trivially. Pass ``require_prerequisites=True`` (used for a deep-research
     step, where nothing else checks that step's own presence) to also fail
     when a later phase is present but an earlier one it depends on is not.
+    *done_before* holds the phases earlier steps already did. They count as
+    prerequisites and are left out of this step's order, e.g. a step may read
+    the text of instruments an earlier step found before it searches again.
 
     Returns ``(order_ok, detail, present)`` where *present* is the list of
     ``(short_name, index)`` pairs for the first tool of each phase that
@@ -175,10 +195,11 @@ def _check_first_occurrence_order(
 
     if require_prerequisites and present:
         last_phase = max(EXPECTED_TOOL_ORDER.index(n) for n in present_names)
+        done = _phases_done(worker_seq) | done_before
         missing = [
             EXPECTED_TOOL_ORDER[i].replace("Worker: ", "")
             for i in range(last_phase)
-            if EXPECTED_TOOL_ORDER[i] not in present_names
+            if EXPECTED_TOOL_ORDER[i] not in done
         ]
         if missing:
             return (
@@ -187,13 +208,15 @@ def _check_first_occurrence_order(
                 present,
             )
 
-    order_ok = all(present[i][1] < present[i + 1][1] for i in range(len(present) - 1))
+    # A phase an earlier step already did has no order left to keep here.
+    ordered = [p for p in present if _phase(f"Worker: {p[0]}") not in done_before]
+    order_ok = all(ordered[i][1] < ordered[i + 1][1] for i in range(len(ordered) - 1))
     if order_ok:
         return True, " → ".join(name for name, _ in present), present
 
-    for i in range(len(present) - 1):
-        if present[i][1] >= present[i + 1][1]:
-            return False, f"{present[i + 1][0]} called before {present[i][0]}", present
+    for i in range(len(ordered) - 1):
+        if ordered[i][1] >= ordered[i + 1][1]:
+            return False, f"{ordered[i + 1][0]} called before {ordered[i][0]}", present
     return False, "order violation", present
 
 
@@ -236,12 +259,14 @@ def _check_tool_order(
         segments = [seg for seg in segments if seg]
         if not segments:
             return True, "n/a (no Worker tools in sequence)"
+        done_before: Set[str] = set()
         for i, seg in enumerate(segments, 1):
             order_ok, detail, _ = _check_first_occurrence_order(
-                seg, require_prerequisites=True
+                seg, require_prerequisites=True, done_before=done_before
             )
             if not order_ok:
                 return False, f"step {i}: {detail}"
+            done_before |= _phases_done(seg)
         return True, f"{len(segments)} step(s), first-occurrence order OK"
 
     worker_seq = [t for t in tool_sequence if t.startswith("Worker:")]

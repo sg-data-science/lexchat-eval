@@ -1006,3 +1006,18 @@ class TestRecordTools:
             {"tool": "find_instruments_made_under", "status": "act_not_in_record"}
         )
         assert self._derive(tool) == []
+
+    def test_made_under_text_scan_is_kept_and_other_blocks_are_not(self):
+        """A code-run text scan quotes the instruments it read, so it is
+        retrieved text. The other blocks LexChat appends are guidance."""
+        tool = copy.deepcopy(self.MADE_UNDER)
+        tool["final_result"] = (
+            tool["raw_result"]
+            + "\n\n[ENABLING POWER — You MAY state that each was made under it.]"
+            + "\n\n[SEARCH SCOPE — text scan by code: code read 1 of the 1 "
+            'instruments.\nFound in 1:\n- ssi/2018/275: regulation 3: "£50"]'
+        )
+        ctx = self._derive(tool)
+        assert ctx[-1].startswith("SEARCH SCOPE — text scan by code:")
+        assert 'regulation 3: "£50"' in ctx[-1]
+        assert "ENABLING POWER" not in " ".join(ctx)

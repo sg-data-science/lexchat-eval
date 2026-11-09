@@ -51,6 +51,11 @@ present but wrong order scores 0.5; any missing tool scores proportionally less.
 clean run from one that jumps back to an earlier phase mid-way through, which `docs/eval-gap-analysis.md`
 flagged as a real blind spot in the original tool-usage check.
 
+**A deep research step may read what an earlier step found.** Order is checked per plan step, without
+the loop-back rule, and a phase an earlier step already did counts as done. So a step that reads the full
+text of instruments an earlier step listed is not skipping discovery, while a first step that reads before
+it has found anything still fails.
+
 **Case-law-only mode.** Delegation and either a case-law search or direct judgment
 lookup are worth half each. An empty search is still a research attempt; this
 check does not establish successful retrieval. Mixed-mode Tool Usage retains the
@@ -239,14 +244,11 @@ honestly can't be credited to a sibling step that didn't.
 Worker prompt. The conversational one asks only that the agent "say so plainly", so there is no
 wording to copy and a paraphrase is the required behaviour, not a partial one.
 
-**"Not found" and "not held" score in full in every mode.** The mandated
-sentence is still in the research Worker prompt, but LexChat measured it
-appearing in none of its pre-pilot answers, because it was never added to the
-conversational prompt. What the Worker is told now travels on its tool results:
-report a miss as not found, say what was searched for, and attribute it to the
-search or the index rather than to the user. So that phrasing is the required
-behaviour and not a paraphrase of a sentence nobody writes. Looser wordings
-still take the 0.5 research-mode penalty.
+**LexChat's current wordings score in full in every mode.** These are "not found" and "not held",
+which LexChat's tool results ask for, the research prompt's new sentence ("The material retrieved in this
+search does not establish the answer."), and "not checked", which the made-under tool asks for when an
+instrument falls outside its record. The older mandated sentence still scores in full for runs from
+older builds. Looser wordings still take the 0.5 research-mode penalty.
 
 ## Step Completion
 

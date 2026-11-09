@@ -1112,7 +1112,9 @@ _GENUINE_GAP_PHRASE = (
 #     follows that instruction literally matches none of the paraphrases above,
 #     so without these entries it scored 0.0 for doing exactly what it was told.
 # "not answer" also covers "do not answer" and "cannot answer"; "n't answer"
-# covers the contracted forms.
+# covers the contracted forms. The last three are how a Worker reports an
+# empty made-under record, e.g. "I found no instrument that names section 117"
+# or "instruments made before 1987 are not covered by this record".
 _GENUINE_GAP_KEYWORDS = (
     "does not contain information",
     "no relevant",
@@ -1122,12 +1124,15 @@ _GENUINE_GAP_KEYWORDS = (
     "not answer",
     "n't answer",
     "switch to research mode",
+    "no instrument",
+    "not covered",
+    "not possible to verify",
 )
 
 # The wording LexChat now asks for, so it earns full marks in every mode
 # rather than the paraphrase penalty.
 #
-# The mandated sentence above is still in WORKER_SYSTEM_PROMPT, but LexChat
+# The mandated sentence above is kept for runs from older builds. LexChat
 # found it absent from its pre-pilot answers, because it was never added to
 # the conversational variant. What the Worker is actually told now is
 # a rule its tool results carry (LexChat/server_py/src/utils/search_scope.py,
@@ -1135,9 +1140,16 @@ _GENUINE_GAP_KEYWORDS = (
 # attribute it to the search or the index rather than to the user. That steers
 # the report to "not found" and "not held", neither of which is a paraphrase of
 # a sentence nobody writes any more.
+#
+# Two more wordings LexChat's prompts now prescribe: the research Worker's
+# sentence for an unanswered question, which replaced the one above, and the
+# made-under tool's instruction that an instrument outside the record's
+# coverage "was not checked".
 _GENUINE_GAP_REQUIRED_WORDINGS = (
     "not found",
     "not held",
+    "does not establish the answer",
+    "not checked",
 )
 
 
