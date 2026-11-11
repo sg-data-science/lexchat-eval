@@ -1219,3 +1219,29 @@ class TestCodeSuppliedInstrumentsCountAsRetrieval:
             )
         )
         assert metric.score == 0.0
+
+
+def test_a_search_result_id_with_a_series_number_matches_its_citation():
+    """LEX lists some old instruments as "uksi/1951/548 (S. 25)"; a citation
+    URL carries only "uksi/1951/548"."""
+    case = LLMTestCase(
+        input="q",
+        actual_output="final",
+        tools_called=[
+            ToolCall(
+                name="delegate_research",
+                input_parameters={},
+                output="[Regs](http://www.legislation.gov.uk/id/uksi/1951/548).",
+            ),
+            ToolCall(
+                name="Worker: search_legislation",
+                input_parameters={"query": "q"},
+                output=json.dumps(
+                    {"results": [{"legislation_id": "uksi/1951/548 (S. 25)"}]}
+                ),
+            ),
+        ],
+    )
+    metric = CitationGroundingMetric()
+    metric.measure(case)
+    assert metric.score == 1.0, metric.reason

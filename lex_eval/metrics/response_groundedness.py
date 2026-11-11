@@ -35,9 +35,21 @@ _MADE_UNDER_ANSWER_BLOCK = re.compile(
 )
 
 
-def _without_made_under_list(answer: str) -> str:
-    """*answer* with LexChat's code-written made-under list removed."""
-    return _MADE_UNDER_ANSWER_BLOCK.sub("\n\n", answer).strip()
+# LexChat's code also marks an instrument its made-under record says is revoked,
+# right after the answer names it: "(recorded on legislation.gov.uk as revoked
+# in part, as checked on 2026-10-10)", or "; recorded ..." or " is recorded
+# ..." inside a parenthesis holding the instrument. Same reason for removing it.
+_REVOCATION_MARK = re.compile(
+    r"\s*\(recorded on legislation\.gov\.uk [^()]*\)"
+    r"|(?:;| is) recorded on legislation\.gov\.uk [^()]*(?=\))"
+)
+
+
+def _without_lexchat_notes(answer: str) -> str:
+    """*answer* with LexChat's code-written made-under list and revocation
+    marks removed."""
+    answer = _MADE_UNDER_ANSWER_BLOCK.sub("\n\n", answer)
+    return _REVOCATION_MARK.sub("", answer).strip()
 
 
 # Wrapper for the approved plan's scope note, added to the prompt so the judge
@@ -162,7 +174,7 @@ class ResponseGroundednessMetric(BaseMetric):
         self.success = False
 
     def measure(self, test_case: LLMTestCase, *args, **kwargs) -> float:
-        actual_output = _without_made_under_list(test_case.actual_output or "")
+        actual_output = _without_lexchat_notes(test_case.actual_output or "")
         ratio = difflib.SequenceMatcher(
             None, actual_output.strip(), self.research_output.strip()
         ).ratio()

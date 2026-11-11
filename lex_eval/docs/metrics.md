@@ -83,6 +83,10 @@ missing two tools. For the order check both are discovery tools, as LexChat
 treats `find_definitions`, so the single-shot no-revisit rule applies to them
 exactly as it does to `search_legislation`.
 
+**A clarification request is not measured.** When LexChat's deep research planner asks the user a
+question instead of researching, the gather records that as a valid outcome with no tool calls, so
+there is nothing to score.
+
 ## Research Output Structure
 
 **Aim.** Checks that the Worker agent's report to the Manager uses the four Markdown headings its
@@ -153,6 +157,9 @@ section search can carry a list, from LexChat's made-under record, of the
 instruments made under the sections it returned. When the index lacks an
 instrument, LexChat's code reads its text from legislation.gov.uk and says
 what to cite it as. An instrument named either way was retrieved by this run.
+
+**A series number on a search result's id is ignored.** LEX lists some older instruments as
+`uksi/1951/548 (S. 25)`, and a citation URL never carries the `(S. 25)`.
 
 **Only legislation.gov.uk URLs are read as Act ids.** A judgment link such as
 `caselaw.nationalarchives.gov.uk/uksc/2025/13` would otherwise become Act id `uksc/2025`, which no
@@ -516,7 +523,9 @@ not failed for leaving one of its caveats out.
 **LexChat's made-under list is removed from the answer before judging.** In conversational mode,
 LexChat's code ends some answers with "Instruments made under the sections cited above, from the
 made-under record". The Manager never wrote it and its facts come from the record, not the research
-output, so the judge failed every answer that carried it.
+output, so the judge failed every answer that carried it. The same goes for the note LexChat's code
+puts after an instrument the record says is revoked, such as "(recorded on legislation.gov.uk as revoked
+in part, as checked on 2026-10-10)": the judge read the date as invented.
 
 **The `<suggestions>` block never reaches this metric.** In conversational mode the Manager is told to
 end every reply with a `<suggestions>` block of follow-up questions. LexChat strips it from the answer

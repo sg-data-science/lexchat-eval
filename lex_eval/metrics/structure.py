@@ -701,7 +701,10 @@ def _retrieved_legislation_ids(tools: list) -> set:
                 for r in (data or {}).get("results", []):
                     lid = r.get("legislation_id")
                     if lid:
-                        ids.add(lid.lower())
+                        # LEX sometimes appends a series number to an old
+                        # instrument's id ("uksi/1951/548 (S. 25)"), which
+                        # no citation URL carries.
+                        ids.add(lid.split()[0].lower())
             except (json.JSONDecodeError, AttributeError, TypeError):
                 continue
         elif tool.name == "Worker: get_legislation_changes":

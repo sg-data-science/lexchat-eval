@@ -219,3 +219,22 @@ def test_lexchat_made_under_list_is_not_judged_but_the_footer_is():
     assert "SSI 2024/243" not in judge.prompt
     assert "The answer cites s.3C" in judge.prompt
     assert "*Search scope: the legislation index was searched.*" in judge.prompt
+
+
+def test_lexchat_revocation_marks_are_not_judged():
+    """LexChat's code marks a revoked instrument after the answer names it,
+    with a checked date the Manager never wrote."""
+    answer = (
+        "Existing orders include SSI 2014/243 (recorded on legislation.gov.uk as "
+        "revoked in part, as checked on 2026-10-10). The Regulations 2002 "
+        "(SI 2002/1015; recorded on legislation.gov.uk as revoked in part) were "
+        "made under s.154."
+    )
+    judge = _PromptRecorder()
+    ResponseGroundednessMetric(research_output="Research.", model=judge).measure(
+        _test_case(answer)
+    )
+    assert "2026-10-10" not in judge.prompt
+    assert "recorded on legislation.gov.uk" not in judge.prompt
+    assert "Existing orders include SSI 2014/243." in judge.prompt
+    assert "(SI 2002/1015) were made under s.154." in judge.prompt

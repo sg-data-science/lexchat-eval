@@ -62,6 +62,23 @@ def test_tool_usage(request, record):
     tools appear in the expected phase order. Wrong order caps the score at
     0.5 (fail). Missing steps score proportionally (fail).
     """
+    if record.get("needs_clarification"):
+        # LexChat's deep research planner asked the user a question instead of
+        # researching, a valid outcome the gather records. There is no tool
+        # use to score, and the other metrics already leave it unmeasured.
+        reason = "Not measured: LexChat asked for clarification instead of researching."
+        attach_metric(
+            request,
+            record=record,
+            test_name="tool_usage",
+            metric_name="Tool Usage",
+            score=0.0,
+            threshold=1.0,
+            passed=False,
+            reason=reason,
+        )
+        pytest.skip(reason)
+
     test_case = record_to_test_case(record)
     research_mode = record.get("research_mode", "legislation_only")
     tool_sequence = record.get("tool_sequence") or []
