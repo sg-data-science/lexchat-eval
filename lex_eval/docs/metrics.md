@@ -148,6 +148,12 @@ made-under search was about. Before they were counted, every id this metric
 called fabricated on the definitions and made-under questions of the first
 build offering them was in one of those two lists.
 
+**So do the instruments LexChat's code hands over inside another result.** A
+section search can carry a list, from LexChat's made-under record, of the
+instruments made under the sections it returned. When the index lacks an
+instrument, LexChat's code reads its text from legislation.gov.uk and says
+what to cite it as. An instrument named either way was retrieved by this run.
+
 **Only legislation.gov.uk URLs are read as Act ids.** A judgment link such as
 `caselaw.nationalarchives.gov.uk/uksc/2025/13` would otherwise become Act id `uksc/2025`, which no
 legislation tool call can ever have retrieved, so every case law citation was reported as fabricated.
@@ -179,6 +185,10 @@ A claim the list cannot support, such as what an instrument made under a
 section goes on to provide, is Claim Support's question, which sees the same
 list. The Act a made-under search was about is not read, since the record holds
 none of its text.
+
+The same goes for an instrument a section search's made-under list names, and
+for one whose text LexChat's code read from legislation.gov.uk because the
+index lacks it.
 
 **An Act known only from a change record is not read, and the reason says so.**
 `get_legislation_changes` returns the precise amendment relation, which
@@ -233,8 +243,8 @@ Worker's report says so plainly rather than presenting a confidently unsupported
 to `legislation_only` mode.
 
 **How.** Deterministic, scored per step (a single-shot run has one step). A step whose own tool calls
-returned usable section/full-text content, or a definitions or made-under list with at least one
-instrument in it, doesn't apply and scores 1.0 for that step. A step whose own
+returned usable section/full-text content, a definitions or made-under list with at least one
+instrument in it, or text LexChat's code read from legislation.gov.uk, doesn't apply and scores 1.0 for that step. A step whose own
 retrieval was genuinely empty scores 1.0 if its own report contains the exact mandated disclosure
 sentence, 0.5 if a looser paraphrase is present (e.g. "no relevant", "could not find"), and 0.0 if
 nothing discloses the gap at all. The run's score is the worst step's score, so one step disclosing
@@ -502,6 +512,11 @@ judge is given the block's text as a record of the search: a caveat that matches
 but the record is not a source for any legal point. Before this, correctly repeated caveats were failed as
 unsupported. The record only supports caveats the answer includes. It is not a checklist, so an answer is
 not failed for leaving one of its caveats out.
+
+**LexChat's made-under list is removed from the answer before judging.** In conversational mode,
+LexChat's code ends some answers with "Instruments made under the sections cited above, from the
+made-under record". The Manager never wrote it and its facts come from the record, not the research
+output, so the judge failed every answer that carried it.
 
 **The `<suggestions>` block never reaches this metric.** In conversational mode the Manager is told to
 end every reply with a `<suggestions>` block of follow-up questions. LexChat strips it from the answer

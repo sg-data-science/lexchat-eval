@@ -263,9 +263,45 @@ def _record_result(tool) -> dict:
     return data
 
 
-def _record_listed_ids(tools: list) -> set:
-    """Ids of the instruments a definitions or made-under call listed."""
+# Two blocks LexChat's code appends to a tool result, each handing the Worker
+# evidence for named instruments. A section search lists the instruments its
+# made-under record says were made under the sections returned. When the index
+# lacks an instrument, code reads its text from legislation.gov.uk and says
+# what to cite it as. A block that says the read failed carries no "cite it
+# as", so it adds nothing.
+_SECTION_MADE_UNDER_BLOCK = re.compile(
+    r"\[ENABLING POWER — the made-under record, for the sections[^\]]*\]"
+)
+_BLOCK_ID = re.compile(r"\(([A-Za-z]+/[A-Za-z0-9/-]+)\)")
+_CODE_FETCHED_CITE = re.compile(
+    r"\[PROVISION FETCHED BY CODE — [^\]]*?so code read its text from "
+    r"legislation\.gov\.uk[^\]]*?cite it as (\S+?),"
+)
+
+
+def _code_supplied_ids(tools: list) -> set:
+    """Ids of the instruments LexChat's code listed from its made-under record
+    in a section search, or read from legislation.gov.uk itself."""
     ids: set = set()
+    for tool in tools or []:
+        text = tool.output if isinstance(tool.output, str) else ""
+        for block in _SECTION_MADE_UNDER_BLOCK.findall(text):
+            ids.update(
+                lid.lower()
+                for lid in _BLOCK_ID.findall(block)
+                if _is_plausible_legislation_id(lid.lower())
+            )
+        for url in _CODE_FETCHED_CITE.findall(text):
+            lid = _legislation_id_from_url(url)
+            if lid:
+                ids.add(lid.lower())
+    return ids
+
+
+def _record_listed_ids(tools: list) -> set:
+    """Ids of the instruments a definitions or made-under call listed, or
+    LexChat's code supplied (:func:`_code_supplied_ids`)."""
+    ids: set = _code_supplied_ids(tools)
     for tool in tools or []:
         data = _record_result(tool)
         keys = (

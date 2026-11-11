@@ -1140,3 +1140,82 @@ class TestRecordToolsCountAsRetrieval:
         metric.measure(case)
         assert metric.score == 0.0
         assert "asp/1999/99" in metric.reason
+
+
+class TestCodeSuppliedInstrumentsCountAsRetrieval:
+    """LexChat's code hands the Worker two kinds of evidence inside another
+    tool's result: a section search's list from the made-under record, and the
+    text of an instrument the index lacks, read from legislation.gov.uk. Either
+    instrument was retrieved, so citing it is neither fabrication nor citing
+    unread."""
+
+    _SECTIONS = ToolCall(
+        name="Worker: search_legislation_sections",
+        input_parameters={"legislation_id": "ukpga/1987/26"},
+        output='{"results": []}\n\n[ENABLING POWER — the made-under record, for '
+        "the sections this search returned of the Housing (Scotland) Act 1987 "
+        "(ukpga/1987/26) and the lettered sections beside them: instruments whose "
+        "own preamble names the section given as a power they were made under. "
+        "Made under s.33A: The Homeless Persons (Suspension of Referrals between "
+        "Local Authorities) (Scotland) Order 2022 (ssi/2022/356) (1 more recorded "
+        "on legislation.gov.uk as revoked in whole, not listed). You MAY state ...]",
+    )
+
+    def _lookup(self, read: bool):
+        lead = "[PROVISION FETCHED BY CODE — this index lacks 1962 c. 47"
+        if read:
+            text = (
+                f"{lead}, so code read its text from legislation.gov.uk, the official "
+                "publisher, through the LEX API: the version as enacted. This text "
+                "comes from legislation.gov.uk, a different source from the index: "
+                "cite it as https://www.legislation.gov.uk/ukpga/Eliz2/10-11/47/enacted"
+                ", and say in the report that it was read from legislation.gov.uk.]\n"
+                "117. Regulations ...\n[/PROVISION FETCHED BY CODE]"
+            )
+        else:
+            text = (
+                f"{lead}, and code's read of its text from legislation.gov.uk did not "
+                "complete (no reply), so its text could not be checked here.]"
+            )
+        return ToolCall(
+            name="Worker: lookup_legislation",
+            input_parameters={"legislation_type": "ukpga", "year": 1962, "number": 47},
+            output='{"status": "not_held"}  ' + text,
+        )
+
+    def _case(self, report, *tools):
+        return LLMTestCase(
+            input="q",
+            actual_output="final",
+            tools_called=[
+                ToolCall(name="delegate_research", input_parameters={}, output=report),
+                *tools,
+            ],
+        )
+
+    def test_a_section_search_made_under_list_is_grounded_and_read(self):
+        case = self._case(
+            "[Order](https://www.legislation.gov.uk/id/ssi/2022/356).", self._SECTIONS
+        )
+        for metric in (CitationGroundingMetric(), CitationReadMetric()):
+            metric.measure(case)
+            assert metric.score == 1.0, metric.reason
+
+    def test_text_code_read_from_legislation_gov_uk_is_grounded_read_and_usable(self):
+        report = "[1962 Act](https://www.legislation.gov.uk/ukpga/Eliz2/10-11/47)."
+        case = self._case(report, self._lookup(read=True))
+        for metric in (CitationGroundingMetric(), CitationReadMetric()):
+            metric.measure(case)
+            assert metric.score == 1.0, metric.reason
+        assert _retrieved_usable_content([self._lookup(read=True)])
+
+    def test_a_failed_read_adds_nothing(self):
+        assert not _retrieved_usable_content([self._lookup(read=False)])
+        metric = CitationGroundingMetric()
+        metric.measure(
+            self._case(
+                "[1962 Act](https://www.legislation.gov.uk/ukpga/Eliz2/10-11/47).",
+                self._lookup(read=False),
+            )
+        )
+        assert metric.score == 0.0

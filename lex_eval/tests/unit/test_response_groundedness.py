@@ -189,3 +189,33 @@ def test_search_record_cannot_be_used_to_fail_an_omission():
     metric.measure(_test_case(_DIVERGENT_ACTUAL_OUTPUT))
 
     assert "leaving out anything in this record" in judge.prompt
+
+
+class _PromptRecorder:
+    def __init__(self) -> None:
+        self.prompt = ""
+
+    def generate(self, prompt, schema=None):
+        self.prompt = prompt
+        return _GroundednessJudgement(analysis="a", verdict="pass", reason="r")
+
+
+def test_lexchat_made_under_list_is_not_judged_but_the_footer_is():
+    """LexChat's code appends the made-under list to the answer; the Manager
+    never wrote it, so the judge must not read it as an invented claim."""
+    answer = (
+        "The answer cites s.3C of the 2001 Act.\n\n"
+        "Instruments made under the sections cited above, from the made-under "
+        "record (each instrument's own preamble names the section as a power it "
+        "was made under; the record does not establish ...):\n"
+        "- s.3C of the Transport (Scotland) Act 2001: The Regulations 2024 "
+        "(SSI 2024/243), made under s.3C.\n\n"
+        "*Search scope: the legislation index was searched.*"
+    )
+    judge = _PromptRecorder()
+    ResponseGroundednessMetric(research_output="Research.", model=judge).measure(
+        _test_case(answer)
+    )
+    assert "SSI 2024/243" not in judge.prompt
+    assert "The answer cites s.3C" in judge.prompt
+    assert "*Search scope: the legislation index was searched.*" in judge.prompt
