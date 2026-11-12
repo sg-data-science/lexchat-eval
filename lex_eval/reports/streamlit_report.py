@@ -108,7 +108,7 @@ METRICS: list[tuple[str, str, str]] = [
     (
         "tool_usage",
         "Tool Usage",
-        "Are all of delegate research, search legislation and search legislation sections used, in the correct order (search legislation - search legislation sections - get legislation text if needed), and does the Worker stick to that order rather than looping back to an earlier step later in the same run?",
+        "Did the run delegate research, find the legislation (search legislation) and read it (search legislation sections), in that order, without looping back to an earlier step later in the same run? The definitions and made-under tools count for both finding and reading, since each returns the words the answer relies on.",
     ),
     (
         "mandatory_structure",
@@ -128,7 +128,7 @@ METRICS: list[tuple[str, str, str]] = [
     (
         "citation_read",
         "Citation Read",
-        "Did the researcher actually read every Act it cites? An Act whose text was pulled counts as read, one that only appeared as a title in a search results list does not. One named in a change record is not failed, but is listed. Catches a report making claims about a real, correctly linked source it never opened.",
+        "Did the researcher actually read every Act it cites? An Act whose text was pulled, or that the definitions or made-under tool listed, counts as read; one that only appeared as a title in a search results list does not. One named in a change record is not failed, but is listed. Catches a report making claims about a real, correctly linked source it never opened.",
     ),
     (
         "citation_domain",
