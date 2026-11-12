@@ -432,16 +432,28 @@ class MandatoryStructureMetric(BaseMetric):
         return "Research Output Structure"
 
 
+def _link_target(url: str) -> str:
+    """Where a link points, ignoring http or https, ``www.`` and ``/id/``.
+
+    The Manager rewrites link forms when it writes the answer, so the same
+    legislation can arrive as ``http://www.legislation.gov.uk/id/ssi/2015/331``
+    and ``https://www.legislation.gov.uk/ssi/2015/331``.
+    """
+    return urlparse(url).netloc.lower().removeprefix("www.") + "/" + _url_path(url)
+
+
 class CitationPassthroughMetric(BaseMetric):
     """
     Checks that every reference link from the Worker output is present in
-    the final response delivered to the user.
+    the final response delivered to the user. A link counts as present when
+    the answer links to the same place, or to a part of it (a section of an
+    Act the Worker linked whole), whatever form the link is written in.
 
     Score:
         0.0: Failure A: no URLs found in Worker output at all.
         0.5: Failure B: one or more Worker links are missing from the
                           final response (citation links were dropped).
-        1.0: Pass: every Worker URL is present in the final response.
+        1.0: Pass: every Worker link is present in the final response.
 
     Threshold defaults to 1.0, so both failure modes are recorded as fails.
     """
@@ -474,16 +486,24 @@ class CitationPassthroughMetric(BaseMetric):
             self.reason = "Failure A: no reference links found in Worker output."
             return self.score
 
-        actual = test_case.actual_output or ""
-        passed_through = {link for link in worker_links if link in actual}
-        missing = worker_links - passed_through
+        answer_targets = {
+            _link_target(u) for u in _URL_RE.findall(test_case.actual_output or "")
+        }
+        missing = {
+            link
+            for link in worker_links
+            if not any(
+                t == _link_target(link) or t.startswith(_link_target(link) + "/")
+                for t in answer_targets
+            )
+        }
 
         if missing:
             self.score = 0.5
             self.success = False
             self.reason = (
                 f"Failure B: {len(missing)} of {len(worker_links)} Worker "
-                "link(s) missing from final response."
+                f"link(s) missing from final response: {sorted(missing)}"
             )
         else:
             self.score = 1.0
@@ -952,7 +972,7 @@ class CitationReadMetric(BaseMetric):
     Checks that the Worker actually read every Act it cites: an Act whose text
     was pulled, or that a definitions or made-under search listed, counts as
     read; one that only appeared as a title in a search_legislation results
-    list does not.
+    list does not. One named in a change record is not failed, but is listed.
 
     Catches a report making claims about a real, correctly linked source it
     never opened, e.g. saying an Act "was commenced by" an SI whose text
@@ -965,8 +985,8 @@ class CitationReadMetric(BaseMetric):
     Score:
         0.0: no delegate_research call found; cannot be verified.
         1.0: no legislation.gov.uk citations in Worker output; nothing to check.
-        else: the fraction of cited Acts whose text was read. Threshold is 1.0,
-              so a single unread cited Act fails.
+        else: the fraction of cited Acts read or named in a change record.
+              Threshold is 1.0, so a single other cited Act fails.
     """
 
     def __init__(self, threshold: float = 1.0) -> None:
@@ -1001,38 +1021,36 @@ class CitationReadMetric(BaseMetric):
             return self.score
 
         read_ids = _read_legislation_ids(test_case.tools_called)
-        unread = cited_ids - read_ids
+        # An instrument named in a change record is not failed. The record
+        # states the change it made, which LexChat tells the model it may
+        # cite, and whether a claim goes beyond that change is Claim
+        # Support's question, which sees the same record. It is still listed,
+        # because its text was not read.
+        from_changes = sorted(
+            (cited_ids - read_ids) & _change_record_ids(test_case.tools_called)
+        )
+        unread = cited_ids - read_ids - set(from_changes)
 
         self.score = (len(cited_ids) - len(unread)) / len(cited_ids)
         self.success = self.score >= self.threshold
 
+        changes_note = (
+            f" Known from a change record, so the change it made was retrieved "
+            f"but its text was not: {from_changes}."
+            if from_changes
+            else ""
+        )
         if unread:
-            # Say which route each unread citation came by. A change record
-            # gives the precise amendment relation without the instrument's
-            # text, which is a different position from having seen only a
-            # title, and the two call for different responses from a reviewer.
-            from_changes = sorted(unread & _change_record_ids(test_case.tools_called))
-            from_titles = sorted(unread - set(from_changes))
-            parts = []
-            if from_titles:
-                parts.append(
-                    f"cited on the strength of a search result title, or never "
-                    f"looked up at all: {from_titles}"
-                )
-            if from_changes:
-                parts.append(
-                    f"known from a change record, so the amendment relation was "
-                    f"retrieved but the text was not: {from_changes}"
-                )
             self.reason = (
-                f"Cited without reading: {sorted(unread)}. "
+                f"Cited without reading: {sorted(unread)}, on the strength of a "
+                f"search result title, or never looked up at all. "
                 f"{len(cited_ids) - len(unread)} of {len(cited_ids)} cited Act(s) "
-                f"had their text retrieved. Of the rest, " + "; ".join(parts) + "."
+                f"were read or known from a change record." + changes_note
             )
         else:
             self.reason = (
-                f"All {len(cited_ids)} cited Act(s) had their text retrieved by "
-                "this run."
+                f"All {len(cited_ids)} cited Act(s) were read or known from a "
+                "change record." + changes_note
             )
 
         self.reason += _sibling_read_note(groups)

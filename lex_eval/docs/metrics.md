@@ -121,6 +121,13 @@ present in `actual_output`. No URLs in the Worker output scores 0.0 (nothing to 
 not all links surviving scores 0.5; every link surviving scores 1.0. Threshold defaults to 1.0, so
 either failure mode fails.
 
+**A link counts by where it points, not how it is written.** The Manager rewrites link forms, so the
+same legislation can arrive as `http://www.legislation.gov.uk/id/ssi/2015/331` in the report and
+`https://www.legislation.gov.uk/ssi/2015/331` in the answer. Comparing exact text failed 29 of the 33
+links counted as missing from one model's deep research answers, all of them present in another form.
+An answer linking a section of an instrument the report linked whole also counts, since it still cites
+that instrument. The reason lists any link still missing.
+
 ## Citation Grounding
 
 **Aim.** Checks that every Act the Worker's report cites was actually retrieved by that run's own tool
@@ -197,16 +204,13 @@ The same goes for an instrument a section search's made-under list names, and
 for one whose text LexChat's code read from legislation.gov.uk because the
 index lacks it.
 
-**An Act known only from a change record is not read, and the reason says so.**
-`get_legislation_changes` returns the precise amendment relation, which
-provisions were inserted or amended and by which, but not the instrument's
-text. That is a different position from having seen only a search-result title,
-and a reviewer has to be able to tell them apart: measured over twelve
-responses, 41 of 44 unread citations came from a change record and only 3 from
-a title alone. So the score is unchanged, since the text really was not pulled,
-and the reason splits the unread ids by which route each came by. Deciding to
-report rather than rescore follows the same rule as Step Completion's halted
-steps: keep the verdict, name the cause.
+**An Act known only from a change record is not failed, but is listed.**
+`get_legislation_changes` returns which instrument changed or commenced which provisions, but not the
+instrument's text. Citing it for that change is what LexChat tells the model it may do, and most such
+citations say exactly that, so failing them measured a rule rather than the answer. Whether a claim goes
+further than the change, for example describing what the instrument says, is Claim Support's question,
+and Claim Support sees the same change record. The reason still lists these citations separately, since
+their text was not read.
 
 **Why.** Citation Grounding accepts an Act that merely turned up in a search results list, so an
 answer can invent a relationship ("made under", "inserted by", "commenced by") for a source nobody
@@ -481,6 +485,15 @@ silence on something.
 **The retrieved text includes the definitions and made-under lists.** Each defining clause, and each
 instrument the made-under record lists with the record's count and coverage, is part of what the judge
 quotes from, so "37 instruments were made under section 95" can be traced to the list that said so.
+
+**So does the change record.** Each change a `get_legislation_changes` call returns becomes one line,
+such as "Change record of asp/2014/12: ssi/2015/331 art. 3, coming into force: s. 1, s. 2", so a claim
+that an instrument commenced or amended a provision can be traced to the record. LexChat's guidance
+appended to the record is left out.
+
+**So does text LexChat's code read from legislation.gov.uk** when the index lacks an instrument. The
+code appends that text to a lookup or text-read result, and the model reads it, so a claim quoting it
+is traceable. A note saying the read failed adds nothing.
 
 **A halted run is not scored.** When LexChat's agent loop hits its ReAct turn cap it returns
 `[Research halted: exceeded N tool-call steps]` in place of a report. Asked to find up to 8 claims in

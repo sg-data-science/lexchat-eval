@@ -1021,3 +1021,61 @@ class TestRecordTools:
         assert ctx[-1].startswith("SEARCH SCOPE — text scan by code:")
         assert 'regulation 3: "£50"' in ctx[-1]
         assert "ENABLING POWER" not in " ".join(ctx)
+
+    def test_change_record_gives_one_line_per_change_once(self):
+        """Claim Support checks "SSI 2015/331 commenced s.1" against these
+        lines; the guidance LexChat appends to the record is not kept, and a
+        record read twice in one run is not repeated."""
+        record = {
+            "legislation_id": "asp/2014/12",
+            "related": [
+                {
+                    "legislation_id": "ssi/2015/331",
+                    "type_of_effect": "coming into force",
+                    "changes": [{"by": "art. 3", "changed": ["s. 1", None, "s. 2"]}],
+                },
+                {
+                    "legislation_id": "ssi/2016/30",
+                    "type_of_effect": "coming into force",
+                    "changes": [
+                        {
+                            "by": "art. 3",
+                            "changed": ["s. 3"],
+                            "in_force": "2016-04-18",
+                            "qualification": "wholly in force",
+                        }
+                    ],
+                },
+            ],
+        }
+        tool = {
+            "name": "get_legislation_changes",
+            "raw_result": json.dumps(record),
+            "final_result": json.dumps(record) + "\n\n[CHANGE RECORD — you MAY ...]",
+        }
+        ctx = self._derive(tool, copy.deepcopy(tool))
+        assert ctx == [
+            "Change record of asp/2014/12: ssi/2015/331 art. 3, coming into force: "
+            "s. 1, s. 2",
+            "Change record of asp/2014/12: ssi/2016/30 art. 3, coming into force: "
+            "s. 3 (2016-04-18, wholly in force)",
+        ]
+
+    def test_text_code_read_from_legislation_gov_uk_is_kept_once(self):
+        """The model reads the text LexChat's code fetched, so Claim Support
+        must too; a failed read adds nothing."""
+        read = (
+            '{"status": "not_held"}\n\n[PROVISION FETCHED BY CODE — this index '
+            "lacks 2025/119, so code read its text from legislation.gov.uk, the "
+            "official publisher. cite it as https://www.legislation.gov.uk/ssi/"
+            "2025/119/made, and say so.]\nComing into force 10th May 2025\n"
+            "[/PROVISION FETCHED BY CODE]"
+        )
+        failed = (
+            "[PROVISION FETCHED BY CODE — this index lacks 1962 c. 47, and code's "
+            "read of its text from legislation.gov.uk did not complete.]"
+        )
+        lookup = {"name": "lookup_legislation", "final_result": read}
+        text = {"name": "get_legislation_text", "final_result": read}
+        miss = {"name": "lookup_legislation", "final_result": failed}
+        assert self._derive(lookup, text, miss) == ["Coming into force 10th May 2025"]

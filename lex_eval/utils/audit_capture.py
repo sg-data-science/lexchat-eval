@@ -55,6 +55,15 @@ MAX_AUDIT_SCHEMA_VERSION = 6
 # no square brackets inside it.
 _TEXT_SCAN = re.compile(r"\[(SEARCH SCOPE — text scan by code:[^\]]*)\]")
 
+# When the index lacks an instrument's text, LexChat's code reads it from
+# legislation.gov.uk and appends it, whole or summarised, to the tool result the
+# model sees (any tool: a lookup, a text read). A block saying the read failed
+# has no body and does not match.
+_CODE_FETCHED_TEXT = re.compile(
+    r"\[PROVISION FETCHED BY CODE — [^\]]*?so code read its text from "
+    r"legislation\.gov\.uk[^\]]*\]\n([\s\S]*?)\n\[/PROVISION FETCHED BY CODE\]"
+)
+
 
 def _trunc(s: str, n: int = VERBOSE_TRUNCATE_CHARS) -> str:
     """Truncate a string for display in verbose logs."""
@@ -106,10 +115,19 @@ def derive_retrieval(
     retrieval_context: List[str] = []
     case_law_context: List[Dict[str, Any]] = []
     fallback_used = False
+    seen_changes: set = set()
+    seen_fetched: set = set()
 
     for d in audit.get("delegations", []):
         for t in d.get("tools", []):
             tool_name = t.get("name", "")
+
+            # A run often reads the same instrument twice (a lookup, then a
+            # text read), so each fetched text is kept once.
+            for body in _CODE_FETCHED_TEXT.findall(t.get("final_result") or ""):
+                if body.strip() and body not in seen_fetched:
+                    seen_fetched.add(body)
+                    retrieval_context.append(body.strip())
 
             # Case law tools read from the tool's own result, not from
             # api_calls. The National Archives returns Atom XML/LegalDocML,
@@ -199,6 +217,40 @@ def derive_retrieval(
                 scan = _TEXT_SCAN.search(t.get("final_result") or "")
                 if scan:
                     retrieval_context.append(scan.group(1))
+                continue
+
+            # A change record lists which instrument changed or commenced which
+            # provisions. Each change becomes one line, so Claim Support can
+            # check a claim such as "SSI 2015/331 commenced s.1" against it.
+            # LexChat's appended guidance on how to state the record is skipped.
+            if tool_name == "get_legislation_changes":
+                result = _tool_result_json(t) or {}
+                target = result.get("legislation_id", "")
+                for rel in result.get("related") or []:
+                    if not isinstance(rel, dict):
+                        continue
+                    who = rel.get("legislation_id", "")
+                    effect = rel.get("type_of_effect", "")
+                    for ch in rel.get("changes") or []:
+                        if not isinstance(ch, dict):
+                            continue
+                        changed = ", ".join(
+                            str(c) for c in ch.get("changed") or [] if c
+                        )
+                        line = (
+                            f"Change record of {target}: {who} {ch.get('by') or ''}, "
+                            f"{effect}: {changed}"
+                        )
+                        when = ", ".join(
+                            p
+                            for p in [ch.get("in_force"), ch.get("qualification")]
+                            if p
+                        )
+                        line = f"{line} ({when})" if when else line
+                        # A run often reads the same record more than once.
+                        if line not in seen_changes:
+                            seen_changes.add(line)
+                            retrieval_context.append(line)
                 continue
 
             for call in t.get("api_calls", []):

@@ -10,6 +10,7 @@ from lex_eval.testcase import LLMTestCase, ToolCall
 
 from lex_eval.metrics.structure import (
     CitationGroundingMetric,
+    CitationPassthroughMetric,
     CitationReadMetric,
     GenuineGapMetric,
     MandatoryStructureMetric,
@@ -976,10 +977,10 @@ class TestChangeRecordCountsAsRetrieval:
 
 
 class TestCitationReadNamesTheRoute:
-    """The verdict stays; the explanation stops misdescribing what happened.
+    """A change-record citation passes but is still named; a title-only one fails.
 
     An Act known only from a change record was retrieved, so it is not
-    fabrication, but its text was not pulled, so it is not read. Saying it was
+    fabrication, but its text was not pulled, so it is listed as such. Saying it was
     "cited on the strength of a search result title" is simply untrue, and it
     was untrue of 41 of 44 unread citations across twelve measured responses.
     """
@@ -1009,9 +1010,12 @@ class TestCitationReadNamesTheRoute:
         )
         metric = CitationReadMetric()
         metric.measure(self._case("asp/2010/8", changes))
-        assert "known from a change record" in metric.reason
+        assert "Known from a change record" in metric.reason
+        assert "asp/2010/8" in metric.reason
         assert "search result title" not in metric.reason
-        assert metric.score == 0.0  # the verdict is unchanged
+        # Not failed: the change it made is the record's, and whether a claim
+        # goes beyond that change is Claim Support's question.
+        assert metric.score == 1.0
 
     def test_a_search_title_citation_is_still_named_as_such(self):
         search = ToolCall(
@@ -1024,7 +1028,8 @@ class TestCitationReadNamesTheRoute:
         metric = CitationReadMetric()
         metric.measure(self._case("asp/2010/8", search))
         assert "search result title" in metric.reason
-        assert "known from a change record" not in metric.reason
+        assert "Known from a change record" not in metric.reason
+        assert metric.score == 0.0
 
     def test_a_read_citation_still_passes(self):
         read = ToolCall(
@@ -1245,3 +1250,55 @@ def test_a_search_result_id_with_a_series_number_matches_its_citation():
     metric = CitationGroundingMetric()
     metric.measure(case)
     assert metric.score == 1.0, metric.reason
+
+
+class TestCitationPassthroughComparesWhereLinksPoint:
+    """The Manager rewrites link forms, so the same legislation arrives as
+    http or https, with or without www and /id/. An answer linking a section
+    of an instrument the Worker linked whole still cites it."""
+
+    def _measure(self, worker, answer):
+        metric = CitationPassthroughMetric()
+        metric.measure(
+            LLMTestCase(
+                input="q",
+                actual_output=answer,
+                tools_called=[
+                    ToolCall(
+                        name="delegate_research", input_parameters={}, output=worker
+                    )
+                ],
+            )
+        )
+        return metric
+
+    def test_a_rewritten_link_form_is_carried_through(self):
+        metric = self._measure(
+            "[SSI](http://www.legislation.gov.uk/id/ssi/2015/331).",
+            "[SSI](https://legislation.gov.uk/ssi/2015/331/).",
+        )
+        assert metric.score == 1.0, metric.reason
+
+    def test_a_section_link_carries_a_whole_instrument_link(self):
+        metric = self._measure(
+            "[Order](http://www.legislation.gov.uk/id/uksi/2012/3073).",
+            "[art. 2](http://www.legislation.gov.uk/id/uksi/2012/3073/article/2).",
+        )
+        assert metric.score == 1.0, metric.reason
+
+    def test_a_dropped_link_still_fails_and_is_named(self):
+        metric = self._measure(
+            "[A](http://www.legislation.gov.uk/id/ssi/2019/71) and "
+            "[B](http://www.legislation.gov.uk/id/ssi/2015/331).",
+            "[B](https://www.legislation.gov.uk/ssi/2015/331).",
+        )
+        assert metric.score == 0.5
+        assert "ssi/2019/71" in metric.reason
+
+    def test_a_whole_instrument_link_does_not_carry_a_section_link(self):
+        metric = self._measure(
+            "[s.10](http://www.legislation.gov.uk/id/ukpga/1978/30/section/10).",
+            "[Act](http://www.legislation.gov.uk/id/ukpga/1978/30) and "
+            "[s.1](http://www.legislation.gov.uk/id/ukpga/1978/30/section/1).",
+        )
+        assert metric.score == 0.5

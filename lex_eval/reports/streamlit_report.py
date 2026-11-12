@@ -118,7 +118,7 @@ METRICS: list[tuple[str, str, str]] = [
     (
         "citation_passthrough",
         "Reference Links",
-        "Are all reference links found by the researcher included in the final answer given to the user.",
+        "Are all reference links found by the researcher included in the final answer given to the user? A link counts by where it points, so a rewritten form or a link to a section of the same Act still counts.",
     ),
     (
         "citation_grounding",
@@ -128,7 +128,7 @@ METRICS: list[tuple[str, str, str]] = [
     (
         "citation_read",
         "Citation Read",
-        "Did the researcher actually read every Act it cites? An Act whose text was pulled counts as read, one that only appeared as a title in a search results list does not. Catches a report making claims about a real, correctly linked source it never opened.",
+        "Did the researcher actually read every Act it cites? An Act whose text was pulled counts as read, one that only appeared as a title in a search results list does not. One named in a change record is not failed, but is listed. Catches a report making claims about a real, correctly linked source it never opened.",
     ),
     (
         "citation_domain",
