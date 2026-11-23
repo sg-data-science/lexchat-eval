@@ -33,12 +33,13 @@ and quotes for review, without changing their thresholds.
 
 ## Tool Usage
 
-**Aim.** Checks that a legislation research run actually did the research: called
-`delegate_research`, `search_legislation`, and `search_legislation_sections`, and did so in the right
-phase order. Catches a run that skips straight to an answer, or one that jumps around between
+**Aim.** Checks that a legislation research run actually did the research: delegated it, found the
+legislation, and read it, and did so in the right phase order. Catches a run that skips straight to an answer, or one that jumps around between
 discovery and retrieval instead of following a coherent research process.
 
-**How.** Deterministic, no judge. Presence is worth 1/3 per required tool. For `legislation_only`
+**How.** Deterministic, no judge. Presence is worth 1/3 per required step: `delegate_research`; finding
+the legislation (`search_legislation`, `find_definitions` or `find_instruments_made_under`); reading it
+(`search_legislation_sections`, `find_definitions` or `find_instruments_made_under`). For `legislation_only`
 questions, order is also checked: the first occurrence of each tool must come in the sequence
 discover → retrieve → fallback, and once a later phase has started, the run must not revisit an
 earlier one. A revisit (interleaved re-querying) is reported as an order violation even if the
@@ -49,6 +50,11 @@ present but wrong order scores 0.5; any missing tool scores proportionally less.
 **Why.** The loop-back check exists because a simpler "first occurrence in order" check can't tell a
 clean run from one that jumps back to an earlier phase mid-way through, which `docs/eval-gap-analysis.md`
 flagged as a real blind spot in the original tool-usage check.
+
+**A deep research step may read what an earlier step found.** Order is checked per plan step, without
+the loop-back rule, and a phase an earlier step already did counts as done. So a step that reads the full
+text of instruments an earlier step listed is not skipping discovery, while a first step that reads before
+it has found anything still fails.
 
 **Case-law-only mode.** Delegation and either a case-law search or direct judgment
 lookup are worth half each. An empty search is still a research attempt; this
@@ -67,6 +73,19 @@ prompt makes it mandatory for a question about whether a provision is in force,
 commenced or amended, but nothing in the question set marks which questions
 those are, so requiring it here would fail every other question. It is ignored
 by the order check, so a run that calls it is scored on the rest of its chain.
+
+**The definitions and made-under tools count for finding and for reading.**
+`find_definitions` quotes each instrument's defining words, and
+`find_instruments_made_under` reads each instrument's own preamble naming the
+enabling section, so either result is the evidence the answer relies on. A
+made-under question answered from the record alone is a complete run, not one
+missing two tools. For the order check both are discovery tools, as LexChat
+treats `find_definitions`, so the single-shot no-revisit rule applies to them
+exactly as it does to `search_legislation`.
+
+**A clarification request is not measured.** When LexChat's deep research planner asks the user a
+question instead of researching, the gather records that as a valid outcome with no tool calls, so
+there is nothing to score.
 
 ## Research Output Structure
 
@@ -102,6 +121,13 @@ present in `actual_output`. No URLs in the Worker output scores 0.0 (nothing to 
 not all links surviving scores 0.5; every link surviving scores 1.0. Threshold defaults to 1.0, so
 either failure mode fails.
 
+**A link counts by where it points, not how it is written.** The Manager rewrites link forms, so the
+same legislation can arrive as `http://www.legislation.gov.uk/id/ssi/2015/331` in the report and
+`https://www.legislation.gov.uk/ssi/2015/331` in the answer. Comparing exact text failed 29 of the 33
+links counted as missing from one model's deep research answers, all of them present in another form.
+An answer linking a section of an instrument the report linked whole also counts, since it still cites
+that instrument. The reason lists any link still missing.
+
 ## Citation Grounding
 
 **Aim.** Checks that every Act the Worker's report cites was actually retrieved by that run's own tool
@@ -125,6 +151,22 @@ fabrication for correctly sourced citations: measured on two deep-research
 responses, all 14 accused ids came from a change record and appeared in no
 other tool output. That is the worst failure this metric can have, because the
 output accuses the model of inventing a source.
+
+**The definitions and made-under lists count as retrieval.** An instrument
+listed by `find_definitions` or `find_instruments_made_under` came from this
+run's own tool call, so citing it is not fabrication; nor is citing the Act a
+made-under search was about. Before they were counted, every id this metric
+called fabricated on the definitions and made-under questions of the first
+build offering them was in one of those two lists.
+
+**So do the instruments LexChat's code hands over inside another result.** A
+section search can carry a list, from LexChat's made-under record, of the
+instruments made under the sections it returned. When the index lacks an
+instrument, LexChat's code reads its text from legislation.gov.uk and says
+what to cite it as. An instrument named either way was retrieved by this run.
+
+**A series number on a search result's id is ignored.** LEX lists some older instruments as
+`uksi/1951/548 (S. 25)`, and a citation URL never carries the `(S. 25)`.
 
 **Only legislation.gov.uk URLs are read as Act ids.** A judgment link such as
 `caselaw.nationalarchives.gov.uk/uksc/2025/13` would otherwise become Act id `uksc/2025`, which no
@@ -150,16 +192,25 @@ or `get_legislation_text` call that returned usable output, not an error). Score
 cited Acts that were read; threshold is 1.0, so a single unread cited Act fails. Case law citations
 are ignored, since there is no legislation retrieval to check them against.
 
-**An Act known only from a change record is not read, and the reason says so.**
-`get_legislation_changes` returns the precise amendment relation, which
-provisions were inserted or amended and by which, but not the instrument's
-text. That is a different position from having seen only a search-result title,
-and a reviewer has to be able to tell them apart: measured over twelve
-responses, 41 of 44 unread citations came from a change record and only 3 from
-a title alone. So the score is unchanged, since the text really was not pulled,
-and the reason splits the unread ids by which route each came by. Deciding to
-report rather than rescore follows the same rule as Step Completion's halted
-steps: keep the verdict, name the cause.
+**An instrument listed by `find_definitions` or `find_instruments_made_under`
+counts as read.** Each result carries the words a citation of it relies on: the
+defining words, or the instrument's own preamble naming the enabling section.
+A claim the list cannot support, such as what an instrument made under a
+section goes on to provide, is Claim Support's question, which sees the same
+list. The Act a made-under search was about is not read, since the record holds
+none of its text.
+
+The same goes for an instrument a section search's made-under list names, and
+for one whose text LexChat's code read from legislation.gov.uk because the
+index lacks it.
+
+**An Act known only from a change record is not failed, but is listed.**
+`get_legislation_changes` returns which instrument changed or commenced which provisions, but not the
+instrument's text. Citing it for that change is what LexChat tells the model it may do, and most such
+citations say exactly that, so failing them measured a rule rather than the answer. Whether a claim goes
+further than the change, for example describing what the instrument says, is Claim Support's question,
+and Claim Support sees the same change record. The reason still lists these citations separately, since
+their text was not read.
 
 **Why.** Citation Grounding accepts an Act that merely turned up in a search results list, so an
 answer can invent a relationship ("made under", "inserted by", "commenced by") for a source nobody
@@ -203,7 +254,8 @@ Worker's report says so plainly rather than presenting a confidently unsupported
 to `legislation_only` mode.
 
 **How.** Deterministic, scored per step (a single-shot run has one step). A step whose own tool calls
-returned usable section/full-text content doesn't apply and scores 1.0 for that step. A step whose own
+returned usable section/full-text content, a definitions or made-under list with at least one
+instrument in it, or text LexChat's code read from legislation.gov.uk, doesn't apply and scores 1.0 for that step. A step whose own
 retrieval was genuinely empty scores 1.0 if its own report contains the exact mandated disclosure
 sentence, 0.5 if a looser paraphrase is present (e.g. "no relevant", "could not find"), and 0.0 if
 nothing discloses the gap at all. The run's score is the worst step's score, so one step disclosing
@@ -213,14 +265,11 @@ honestly can't be credited to a sibling step that didn't.
 Worker prompt. The conversational one asks only that the agent "say so plainly", so there is no
 wording to copy and a paraphrase is the required behaviour, not a partial one.
 
-**"Not found" and "not held" score in full in every mode.** The mandated
-sentence is still in the research Worker prompt, but LexChat measured it
-appearing in none of its pre-pilot answers, because it was never added to the
-conversational prompt. What the Worker is told now travels on its tool results:
-report a miss as not found, say what was searched for, and attribute it to the
-search or the index rather than to the user. So that phrasing is the required
-behaviour and not a paraphrase of a sentence nobody writes. Looser wordings
-still take the 0.5 research-mode penalty.
+**LexChat's current wordings score in full in every mode.** These are "not found" and "not held",
+which LexChat's tool results ask for, the research prompt's new sentence ("The material retrieved in this
+search does not establish the answer."), and "not checked", which the made-under tool asks for when an
+instrument falls outside its record. The older mandated sentence still scores in full for runs from
+older builds. Looser wordings still take the 0.5 research-mode penalty.
 
 ## Step Completion
 
@@ -239,7 +288,8 @@ one that fails is it not working. Read this alongside the dashboard's research
 limit column rather than on its own.
 
 **How.** Deterministic. For each step, if its own tool calls returned usable
-`search_legislation_sections`/`get_legislation_text` content but its own report cites none of the Acts
+`search_legislation_sections`/`get_legislation_text` content, or a definitions or made-under list,
+but its own report cites none of the Acts
 that retrieval actually returned (citing a sibling step's Act doesn't count, that step still has nothing
 of its own to show for its retrieval), that step fails. Score is the fraction of steps that pass;
 threshold is 1.0, so a single lost step fails the response.
@@ -432,6 +482,19 @@ own evidence. Score is supported claims divided by scorable claims. Absence clai
 reported but excluded from the denominator entirely, since nothing can be quoted to prove a law's
 silence on something.
 
+**The retrieved text includes the definitions and made-under lists.** Each defining clause, and each
+instrument the made-under record lists with the record's count and coverage, is part of what the judge
+quotes from, so "37 instruments were made under section 95" can be traced to the list that said so.
+
+**So does the change record.** Each change a `get_legislation_changes` call returns becomes one line,
+such as "Change record of asp/2014/12: ssi/2015/331 art. 3, coming into force: s. 1, s. 2", so a claim
+that an instrument commenced or amended a provision can be traced to the record. LexChat's guidance
+appended to the record is left out.
+
+**So does text LexChat's code read from legislation.gov.uk** when the index lacks an instrument. The
+code appends that text to a lookup or text-read result, and the model reads it, so a claim quoting it
+is traceable. A note saying the read failed adds nothing.
+
 **A halted run is not scored.** When LexChat's agent loop hits its ReAct turn cap it returns
 `[Research halted: exceeded N tool-call steps]` in place of a report. Asked to find up to 8 claims in
 that one sentence, the judge either invents them or errors, so a report holding nothing but the
@@ -469,6 +532,13 @@ judge is given the block's text as a record of the search: a caveat that matches
 but the record is not a source for any legal point. Before this, correctly repeated caveats were failed as
 unsupported. The record only supports caveats the answer includes. It is not a checklist, so an answer is
 not failed for leaving one of its caveats out.
+
+**LexChat's made-under list is removed from the answer before judging.** In conversational mode,
+LexChat's code ends some answers with "Instruments made under the sections cited above, from the
+made-under record". The Manager never wrote it and its facts come from the record, not the research
+output, so the judge failed every answer that carried it. The same goes for the note LexChat's code
+puts after an instrument the record says is revoked, such as "(recorded on legislation.gov.uk as revoked
+in part, as checked on 2026-10-10)": the judge read the date as invented.
 
 **The `<suggestions>` block never reaches this metric.** In conversational mode the Manager is told to
 end every reply with a `<suggestions>` block of follow-up questions. LexChat strips it from the answer

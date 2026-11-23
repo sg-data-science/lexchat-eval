@@ -225,11 +225,96 @@ def _usable_output(output) -> bool:
 
 def _retrieved_usable_content(tools: list) -> bool:
     """True if any ``search_legislation_sections``/``get_legislation_text``
-    call among *tools* returned non-empty output, i.e. retrieval wasn't empty.
+    call among *tools* returned non-empty output, or a definitions or
+    made-under search listed at least one instrument, i.e. retrieval wasn't
+    empty.
     """
     return any(
         tool.name in _TEXT_TOOLS and _usable_output(tool.output) for tool in tools
-    )
+    ) or bool(_record_listed_ids(tools))
+
+
+# LexChat's two record tools. Each lists instruments with the evidence an
+# answer relies on: a definitions search quotes each instrument's defining
+# words, and the made-under record reads each instrument's own preamble naming
+# the enabling section. An instrument they list counts as retrieved and read.
+# Whether a particular claim about it is supported is Claim Support's question.
+_DEFINITIONS_TOOL = "Worker: find_definitions"
+_MADE_UNDER_TOOL = "Worker: find_instruments_made_under"
+
+
+def _record_result(tool) -> dict:
+    """The JSON result of a definitions or made-under call, or {}.
+
+    Only a made-under result with status ``found`` counts: the other statuses
+    list nothing, and two of them say nothing about the law at all.
+    """
+    if tool.name not in (_DEFINITIONS_TOOL, _MADE_UNDER_TOOL):
+        return {}
+    try:
+        raw = tool.output
+        data = _leading_json(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if tool.name == _MADE_UNDER_TOOL and data.get("status") != "found":
+        return {}
+    return data
+
+
+# Two blocks LexChat's code appends to a tool result, each handing the Worker
+# evidence for named instruments. A section search lists the instruments its
+# made-under record says were made under the sections returned. When the index
+# lacks an instrument, code reads its text from legislation.gov.uk and says
+# what to cite it as. A block that says the read failed carries no "cite it
+# as", so it adds nothing.
+_SECTION_MADE_UNDER_BLOCK = re.compile(
+    r"\[ENABLING POWER — the made-under record, for the sections[^\]]*\]"
+)
+_BLOCK_ID = re.compile(r"\(([A-Za-z]+/[A-Za-z0-9/-]+)\)")
+_CODE_FETCHED_CITE = re.compile(
+    r"\[PROVISION FETCHED BY CODE — [^\]]*?so code read its text from "
+    r"legislation\.gov\.uk[^\]]*?cite it as (\S+?),"
+)
+
+
+def _code_supplied_ids(tools: list) -> set:
+    """Ids of the instruments LexChat's code listed from its made-under record
+    in a section search, or read from legislation.gov.uk itself."""
+    ids: set = set()
+    for tool in tools or []:
+        text = tool.output if isinstance(tool.output, str) else ""
+        for block in _SECTION_MADE_UNDER_BLOCK.findall(text):
+            ids.update(
+                lid.lower()
+                for lid in _BLOCK_ID.findall(block)
+                if _is_plausible_legislation_id(lid.lower())
+            )
+        for url in _CODE_FETCHED_CITE.findall(text):
+            lid = _legislation_id_from_url(url)
+            if lid:
+                ids.add(lid.lower())
+    return ids
+
+
+def _record_listed_ids(tools: list) -> set:
+    """Ids of the instruments a definitions or made-under call listed, or
+    LexChat's code supplied (:func:`_code_supplied_ids`)."""
+    ids: set = _code_supplied_ids(tools)
+    for tool in tools or []:
+        data = _record_result(tool)
+        keys = (
+            ("definitions", "longer_terms")
+            if tool.name == _DEFINITIONS_TOOL
+            else ("instruments",)
+        )
+        for key in keys:
+            for e in data.get(key) or []:
+                lid = e.get("legislation_id") if isinstance(e, dict) else None
+                if lid:
+                    ids.add(lid.lower())
+    return ids
 
 
 class MandatoryStructureMetric(BaseMetric):
@@ -347,16 +432,28 @@ class MandatoryStructureMetric(BaseMetric):
         return "Research Output Structure"
 
 
+def _link_target(url: str) -> str:
+    """Where a link points, ignoring http or https, ``www.`` and ``/id/``.
+
+    The Manager rewrites link forms when it writes the answer, so the same
+    legislation can arrive as ``http://www.legislation.gov.uk/id/ssi/2015/331``
+    and ``https://www.legislation.gov.uk/ssi/2015/331``.
+    """
+    return urlparse(url).netloc.lower().removeprefix("www.") + "/" + _url_path(url)
+
+
 class CitationPassthroughMetric(BaseMetric):
     """
     Checks that every reference link from the Worker output is present in
-    the final response delivered to the user.
+    the final response delivered to the user. A link counts as present when
+    the answer links to the same place, or to a part of it (a section of an
+    Act the Worker linked whole), whatever form the link is written in.
 
     Score:
         0.0: Failure A: no URLs found in Worker output at all.
         0.5: Failure B: one or more Worker links are missing from the
                           final response (citation links were dropped).
-        1.0: Pass: every Worker URL is present in the final response.
+        1.0: Pass: every Worker link is present in the final response.
 
     Threshold defaults to 1.0, so both failure modes are recorded as fails.
     """
@@ -389,16 +486,24 @@ class CitationPassthroughMetric(BaseMetric):
             self.reason = "Failure A: no reference links found in Worker output."
             return self.score
 
-        actual = test_case.actual_output or ""
-        passed_through = {link for link in worker_links if link in actual}
-        missing = worker_links - passed_through
+        answer_targets = {
+            _link_target(u) for u in _URL_RE.findall(test_case.actual_output or "")
+        }
+        missing = {
+            link
+            for link in worker_links
+            if not any(
+                t == _link_target(link) or t.startswith(_link_target(link) + "/")
+                for t in answer_targets
+            )
+        }
 
         if missing:
             self.score = 0.5
             self.success = False
             self.reason = (
                 f"Failure B: {len(missing)} of {len(worker_links)} Worker "
-                "link(s) missing from final response."
+                f"link(s) missing from final response: {sorted(missing)}"
             )
         else:
             self.score = 1.0
@@ -584,8 +689,10 @@ def _retrieved_legislation_ids(tools: list) -> set:
     """
     Return the set of legislation_ids that *tools* actually retrieved:
     results returned by ``search_legislation``, the legislation_id argument
-    passed to ``search_legislation_sections`` / ``get_legislation_text``, and
-    the instruments named in a ``get_legislation_changes`` change record.
+    passed to ``search_legislation_sections`` / ``get_legislation_text``, the
+    instruments named in a ``get_legislation_changes`` change record, and the
+    instruments a definitions or made-under search listed (plus the Act the
+    made-under search was about).
 
     The change record has to count. It is legislation.gov.uk's own record of
     what amends or commences an instrument, so an Act it names was retrieved by
@@ -614,7 +721,10 @@ def _retrieved_legislation_ids(tools: list) -> set:
                 for r in (data or {}).get("results", []):
                     lid = r.get("legislation_id")
                     if lid:
-                        ids.add(lid.lower())
+                        # LEX sometimes appends a series number to an old
+                        # instrument's id ("uksi/1951/548 (S. 25)"), which
+                        # no citation URL carries.
+                        ids.add(lid.split()[0].lower())
             except (json.JSONDecodeError, AttributeError, TypeError):
                 continue
         elif tool.name == "Worker: get_legislation_changes":
@@ -639,8 +749,12 @@ def _retrieved_legislation_ids(tools: list) -> set:
             lid = params.get("legislation_id")
             if lid:
                 ids.add(lid.lower())
+        elif tool.name == _MADE_UNDER_TOOL:
+            act = _record_result(tool).get("act_id")
+            if act:
+                ids.add(act.lower())
 
-    return ids
+    return ids | _record_listed_ids(tools)
 
 
 def _cited_legislation_ids(report: str) -> set:
@@ -707,7 +821,10 @@ def _read_legislation_ids(tools: list) -> set:
     """
     Return the set of legislation_ids whose *text* was actually read: the
     legislation_id argument of every ``search_legislation_sections`` /
-    ``get_legislation_text`` call among *tools* that returned usable output.
+    ``get_legislation_text`` call among *tools* that returned usable output,
+    and the instruments a definitions or made-under search listed with the
+    words the answer relies on. The Act a made-under search was about is not
+    included: the record holds none of its text.
 
     Narrower than ``_retrieved_legislation_ids`` on purpose. That function
     also counts an Act that merely turned up in a ``search_legislation``
@@ -721,7 +838,7 @@ def _read_legislation_ids(tools: list) -> set:
             lid = (tool.input_parameters or {}).get("legislation_id")
             if lid:
                 ids.add(lid.lower())
-    return ids
+    return ids | _record_listed_ids(tools)
 
 
 def _change_record_ids(tools: list) -> set:
@@ -769,8 +886,8 @@ class CitationGroundingMetric(BaseMetric):
         0.0: no delegate_research call found; citations cannot be verified.
         1.0: no legislation.gov.uk citation URLs in Worker output (nothing
                to falsely ground).
-        0.0: one or more cited Acts were never retrieved by search_legislation,
-               search_legislation_sections, or get_legislation_text in this run.
+        0.0: one or more cited Acts were never retrieved by any of this run's
+               tool calls (see ``_retrieved_legislation_ids``).
         1.0: every cited Act was retrieved by this run.
 
     No partial credit: unlike Reference Links, where "some links survived" is
@@ -828,8 +945,9 @@ class CitationGroundingMetric(BaseMetric):
             self.reason = (
                 f"Fabricated citation(s): {sorted(fabricated)} cited in Worker "
                 "output but never retrieved by search_legislation, "
-                "search_legislation_sections, or get_legislation_text in this run."
-                + broken_note
+                "search_legislation_sections, get_legislation_text, "
+                "get_legislation_changes, find_definitions or "
+                "find_instruments_made_under in this run." + broken_note
             )
         else:
             self.score = 1.0
@@ -852,8 +970,9 @@ class CitationGroundingMetric(BaseMetric):
 class CitationReadMetric(BaseMetric):
     """
     Checks that the Worker actually read every Act it cites: an Act whose text
-    was pulled counts as read, one that only appeared as a title in a
-    search_legislation results list does not.
+    was pulled, or that a definitions or made-under search listed, counts as
+    read; one that only appeared as a title in a search_legislation results
+    list does not. One named in a change record is not failed, but is listed.
 
     Catches a report making claims about a real, correctly linked source it
     never opened, e.g. saying an Act "was commenced by" an SI whose text
@@ -866,8 +985,8 @@ class CitationReadMetric(BaseMetric):
     Score:
         0.0: no delegate_research call found; cannot be verified.
         1.0: no legislation.gov.uk citations in Worker output; nothing to check.
-        else: the fraction of cited Acts whose text was read. Threshold is 1.0,
-              so a single unread cited Act fails.
+        else: the fraction of cited Acts read or named in a change record.
+              Threshold is 1.0, so a single other cited Act fails.
     """
 
     def __init__(self, threshold: float = 1.0) -> None:
@@ -902,38 +1021,36 @@ class CitationReadMetric(BaseMetric):
             return self.score
 
         read_ids = _read_legislation_ids(test_case.tools_called)
-        unread = cited_ids - read_ids
+        # An instrument named in a change record is not failed. The record
+        # states the change it made, which LexChat tells the model it may
+        # cite, and whether a claim goes beyond that change is Claim
+        # Support's question, which sees the same record. It is still listed,
+        # because its text was not read.
+        from_changes = sorted(
+            (cited_ids - read_ids) & _change_record_ids(test_case.tools_called)
+        )
+        unread = cited_ids - read_ids - set(from_changes)
 
         self.score = (len(cited_ids) - len(unread)) / len(cited_ids)
         self.success = self.score >= self.threshold
 
+        changes_note = (
+            f" Known from a change record, so the change it made was retrieved "
+            f"but its text was not: {from_changes}."
+            if from_changes
+            else ""
+        )
         if unread:
-            # Say which route each unread citation came by. A change record
-            # gives the precise amendment relation without the instrument's
-            # text, which is a different position from having seen only a
-            # title, and the two call for different responses from a reviewer.
-            from_changes = sorted(unread & _change_record_ids(test_case.tools_called))
-            from_titles = sorted(unread - set(from_changes))
-            parts = []
-            if from_titles:
-                parts.append(
-                    f"cited on the strength of a search result title, or never "
-                    f"looked up at all: {from_titles}"
-                )
-            if from_changes:
-                parts.append(
-                    f"known from a change record, so the amendment relation was "
-                    f"retrieved but the text was not: {from_changes}"
-                )
             self.reason = (
-                f"Cited without reading: {sorted(unread)}. "
+                f"Cited without reading: {sorted(unread)}, on the strength of a "
+                f"search result title, or never looked up at all. "
                 f"{len(cited_ids) - len(unread)} of {len(cited_ids)} cited Act(s) "
-                f"had their text retrieved. Of the rest, " + "; ".join(parts) + "."
+                f"were read or known from a change record." + changes_note
             )
         else:
             self.reason = (
-                f"All {len(cited_ids)} cited Act(s) had their text retrieved by "
-                "this run."
+                f"All {len(cited_ids)} cited Act(s) were read or known from a "
+                "change record." + changes_note
             )
 
         self.reason += _sibling_read_note(groups)
@@ -1052,7 +1169,9 @@ _GENUINE_GAP_PHRASE = (
 #     follows that instruction literally matches none of the paraphrases above,
 #     so without these entries it scored 0.0 for doing exactly what it was told.
 # "not answer" also covers "do not answer" and "cannot answer"; "n't answer"
-# covers the contracted forms.
+# covers the contracted forms. The last three are how a Worker reports an
+# empty made-under record, e.g. "I found no instrument that names section 117"
+# or "instruments made before 1987 are not covered by this record".
 _GENUINE_GAP_KEYWORDS = (
     "does not contain information",
     "no relevant",
@@ -1062,12 +1181,15 @@ _GENUINE_GAP_KEYWORDS = (
     "not answer",
     "n't answer",
     "switch to research mode",
+    "no instrument",
+    "not covered",
+    "not possible to verify",
 )
 
 # The wording LexChat now asks for, so it earns full marks in every mode
 # rather than the paraphrase penalty.
 #
-# The mandated sentence above is still in WORKER_SYSTEM_PROMPT, but LexChat
+# The mandated sentence above is kept for runs from older builds. LexChat
 # found it absent from its pre-pilot answers, because it was never added to
 # the conversational variant. What the Worker is actually told now is
 # a rule its tool results carry (LexChat/server_py/src/utils/search_scope.py,
@@ -1075,9 +1197,16 @@ _GENUINE_GAP_KEYWORDS = (
 # attribute it to the search or the index rather than to the user. That steers
 # the report to "not found" and "not held", neither of which is a paraphrase of
 # a sentence nobody writes any more.
+#
+# Two more wordings LexChat's prompts now prescribe: the research Worker's
+# sentence for an unanswered question, which replaced the one above, and the
+# made-under tool's instruction that an instrument outside the record's
+# coverage "was not checked".
 _GENUINE_GAP_REQUIRED_WORDINGS = (
     "not found",
     "not held",
+    "does not establish the answer",
+    "not checked",
 )
 
 
@@ -1088,8 +1217,9 @@ class GenuineGapMetric(BaseMetric):
     presenting a confident but unsupported answer.
 
     Only applies to ``legislation_only`` mode: the mandated disclosure sentence and
-    the tools this check inspects (search_legislation_sections, get_legislation_text)
-    are specific to legislation retrieval.
+    the tools this check inspects (search_legislation_sections, get_legislation_text,
+    find_definitions, find_instruments_made_under) are specific to legislation
+    retrieval.
 
     In conversational mode the Worker prompt asks for a plain statement of the
     gap and mandates no exact sentence, so a paraphrase scores full marks there

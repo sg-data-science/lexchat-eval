@@ -1,0 +1,34 @@
+{
+  "recorded_by": "eval team, 4 November 2026 (Gemini gather, Stage 1 onwards)",
+  "what_this_is": "A snapshot of the LexChat build this gather ran against. The release and build are read from the server itself (GET /api/bot-info), not asserted from the local clone.",
+  "server_reported": {
+    "version": "2026.11.1",
+    "build": "v2026.11.1-2-g6b5a15d",
+    "research_mode": "",
+    "scottish_judgments": false,
+    "source": "GET /api/bot-info at gather time"
+  },
+  "lexchat_commit": "6b5a15d",
+  "lexchat_commit_subject": "docs(prepilot): Fix Tracker v57 - release 2026.11.1 (16 fixes), P4.28 and P4.29 added, P3.51/P3.52 parked",
+  "lexchat_commit_date": "2026-11-03",
+  "fix_programme": {
+    "name": "pre-pilot defect fixes",
+    "releases_since_previous_test": [
+      "v2026.10.5",
+      "v2026.11.1"
+    ],
+    "rows_fixed": "97 of 117, 9 of 14 buckets (tracker at v2026.11.1)",
+    "previous_tested_build": "v2026.10.4-4-g1da18ce (12 to 14 October gathers)"
+  },
+  "audit_schema_version": 6,
+  "observed_at_capture": {
+    "active_model": "google/gemini-3.1-pro-preview",
+    "provider": "openrouter",
+    "summarisation_model": "google/gemini-3-flash-preview"
+  },
+  "unknown": [
+    "The server's RESEARCH_MODE environment override beyond the empty value /api/bot-info reports.",
+    "Feature flag settings other than scottish_judgments.",
+    "Prompt or corpus changes made outside the commit history."
+  ]
+}

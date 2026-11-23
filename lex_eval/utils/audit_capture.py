@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,20 @@ VERBOSE_TRUNCATE_CHARS = 500
 # unknown version may have changed a field we depend on rather than added one.
 MIN_AUDIT_SCHEMA_VERSION = 1
 MAX_AUDIT_SCHEMA_VERSION = 6
+
+# The block a code-run text scan appends to a made-under result
+# (LexChat/server_py/src/utils/literal_scan.py::scan_block), which promises
+# no square brackets inside it.
+_TEXT_SCAN = re.compile(r"\[(SEARCH SCOPE — text scan by code:[^\]]*)\]")
+
+# When the index lacks an instrument's text, LexChat's code reads it from
+# legislation.gov.uk and appends it, whole or summarised, to the tool result the
+# model sees (any tool: a lookup, a text read). A block saying the read failed
+# has no body and does not match.
+_CODE_FETCHED_TEXT = re.compile(
+    r"\[PROVISION FETCHED BY CODE — [^\]]*?so code read its text from "
+    r"legislation\.gov\.uk[^\]]*\]\n([\s\S]*?)\n\[/PROVISION FETCHED BY CODE\]"
+)
 
 
 def _trunc(s: str, n: int = VERBOSE_TRUNCATE_CHARS) -> str:
@@ -95,15 +110,24 @@ def derive_retrieval(
     """Derive (retrieval_context, case_law_context, fallback_used) from an audit event.
 
     Split out of :func:`audit_capture` so a stored audit event can be re-read
-    without gathering the response again (``db.py --backfill-case-law``).
+    without gathering the response again (``db.py --backfill-retrieval``).
     """
     retrieval_context: List[str] = []
     case_law_context: List[Dict[str, Any]] = []
     fallback_used = False
+    seen_changes: set = set()
+    seen_fetched: set = set()
 
     for d in audit.get("delegations", []):
         for t in d.get("tools", []):
             tool_name = t.get("name", "")
+
+            # A run often reads the same instrument twice (a lookup, then a
+            # text read), so each fetched text is kept once.
+            for body in _CODE_FETCHED_TEXT.findall(t.get("final_result") or ""):
+                if body.strip() and body not in seen_fetched:
+                    seen_fetched.add(body)
+                    retrieval_context.append(body.strip())
 
             # Case law tools read from the tool's own result, not from
             # api_calls. The National Archives returns Atom XML/LegalDocML,
@@ -141,6 +165,92 @@ def derive_retrieval(
                     ncn = result.get("ncn", "")
                     header = " ".join(p for p in [result.get("title", ""), ncn] if p)
                     retrieval_context.append(f"{header}: {text}" if header else text)
+                continue
+
+            # The two record tools are read from their own result as well. A
+            # definitions search's api_calls hold the 300 raw rows it filtered,
+            # which the model never saw; the made-under record makes no call.
+            if tool_name == "find_definitions":
+                result = _tool_result_json(t) or {}
+                for key in ("definitions", "longer_terms"):
+                    for e in result.get(key) or []:
+                        if not isinstance(e, dict) or not e.get("definition"):
+                            continue
+                        where = " ".join(
+                            p
+                            for p in [e.get("legislation_id"), e.get("provision")]
+                            if p
+                        )
+                        retrieval_context.append(
+                            f"{where}: {e['definition']}" if where else e["definition"]
+                        )
+                continue
+
+            if tool_name == "find_instruments_made_under":
+                result = _tool_result_json(t) or {}
+                if result.get("status") != "found":
+                    continue
+                power = " of ".join(
+                    p for p in [result.get("provision"), result.get("matched_act")] if p
+                )
+                coverage = (result.get("coverage") or {}).get("statement", "")
+                header = (
+                    f"{result.get('count', 0)} instrument(s) whose own preamble "
+                    f"names {power} as a power they were made under."
+                )
+                retrieval_context.append(
+                    f"{header} Coverage: {coverage}" if coverage else header
+                )
+                for inst in result.get("instruments") or []:
+                    if not isinstance(inst, dict):
+                        continue
+                    line = (
+                        f"{inst.get('title', '')} ({inst.get('legislation_id', '')}): "
+                        f"made under {power}"
+                    )
+                    if inst.get("revocation"):
+                        line += f"; {inst['revocation']}"
+                    retrieval_context.append(line)
+                # LexChat's code may also read every listed instrument for a
+                # string the question asks about, appending what it found,
+                # with quoted provisions, to the result the model sees.
+                scan = _TEXT_SCAN.search(t.get("final_result") or "")
+                if scan:
+                    retrieval_context.append(scan.group(1))
+                continue
+
+            # A change record lists which instrument changed or commenced which
+            # provisions. Each change becomes one line, so Claim Support can
+            # check a claim such as "SSI 2015/331 commenced s.1" against it.
+            # LexChat's appended guidance on how to state the record is skipped.
+            if tool_name == "get_legislation_changes":
+                result = _tool_result_json(t) or {}
+                target = result.get("legislation_id", "")
+                for rel in result.get("related") or []:
+                    if not isinstance(rel, dict):
+                        continue
+                    who = rel.get("legislation_id", "")
+                    effect = rel.get("type_of_effect", "")
+                    for ch in rel.get("changes") or []:
+                        if not isinstance(ch, dict):
+                            continue
+                        changed = ", ".join(
+                            str(c) for c in ch.get("changed") or [] if c
+                        )
+                        line = (
+                            f"Change record of {target}: {who} {ch.get('by') or ''}, "
+                            f"{effect}: {changed}"
+                        )
+                        when = ", ".join(
+                            p
+                            for p in [ch.get("in_force"), ch.get("qualification")]
+                            if p
+                        )
+                        line = f"{line} ({when})" if when else line
+                        # A run often reads the same record more than once.
+                        if line not in seen_changes:
+                            seen_changes.add(line)
+                            retrieval_context.append(line)
                 continue
 
             for call in t.get("api_calls", []):

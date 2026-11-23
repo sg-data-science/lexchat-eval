@@ -77,21 +77,31 @@ def test_deep_research_step_with_no_discovery_at_all_still_fails():
 
 
 def test_deep_research_multiple_steps_each_checked_independently():
-    """Step 1 is fine; step 2 skips discovery. The second step's violation
-    must be caught even though the first step was clean."""
+    """Step 1 is fine; step 2 falls back to full text before its own section
+    search. The second step's violation must be caught even though the first
+    step was clean."""
     sequence = [
         _DELEGATE,
         _SEARCH,
-        _SECTIONS,
         _DELEGATE,
-        _SECTIONS,  # step 2: retrieval with no discovery first
-        _SEARCH,
+        _FALLBACK,  # step 2: full text before any section search
+        _SECTIONS,
     ]
     ok, detail = _check_tool_order(
         sequence, "legislation_only", chat_mode="deep_research"
     )
     assert not ok
     assert "step 2" in detail
+
+
+def test_deep_research_step_may_read_what_an_earlier_step_found():
+    """Step 2 reads sections of an Act step 1 found, then searches for
+    another. Its discovery was done by step 1, so this is not skipping it."""
+    sequence = [_DELEGATE, _SEARCH, _SECTIONS, _DELEGATE, _SECTIONS, _SEARCH]
+    ok, detail = _check_tool_order(
+        sequence, "legislation_only", chat_mode="deep_research"
+    )
+    assert ok, detail
 
 
 def test_tool_usage_metric_threads_chat_mode_through():
@@ -218,3 +228,71 @@ class TestHaltedRunsAreNotScoredForMissingTools:
         metric.measure(_case(sequence))
         assert metric.score == 1.0
         assert metric.is_successful()
+
+
+_DEFINITIONS = "Worker: find_definitions"
+_MADE_UNDER = "Worker: find_instruments_made_under"
+
+
+def _score(sequence, chat_mode="research"):
+    from lex_eval.testcase import LLMTestCase, ToolCall
+
+    case = LLMTestCase(
+        input="q",
+        actual_output="a",
+        tools_called=[
+            ToolCall(name=t, input_parameters={}, output="x") for t in sequence
+        ],
+    )
+    metric = ToolUsageMetric(tool_sequence=sequence, chat_mode=chat_mode)
+    metric.measure(case)
+    return metric
+
+
+def test_made_under_alone_finds_and_reads():
+    """A made-under question answered from the record alone, the shape of
+    the v2026.11.1 conversational runs on Q13."""
+    metric = _score([_DELEGATE, _MADE_UNDER], chat_mode="conversational")
+    assert metric.score == 1.0, metric.reason
+    assert "find_instruments_made_under" in metric.reason
+
+
+def test_definitions_then_sections_in_a_deep_research_step_passes():
+    """find_definitions is the step's discovery, so the section searches
+    after it have their prerequisite."""
+    sequence = [_DELEGATE, _DEFINITIONS, _SECTIONS, _SECTIONS, _DELEGATE, _DEFINITIONS]
+    metric = _score(sequence, chat_mode="deep_research")
+    assert metric.score == 1.0, metric.reason
+
+
+def test_full_text_of_instruments_an_earlier_step_listed_passes():
+    """The v2026.11.1 Q25 shape: the made-under record lists the instruments
+    and a later step reads their full text. The record counts as finding and
+    reading, so the later step has its prerequisites."""
+    sequence = [
+        _DELEGATE,
+        _SEARCH,
+        _MADE_UNDER,
+        _DELEGATE,
+        _MADE_UNDER,
+        _DELEGATE,
+        _FALLBACK,
+    ]
+    metric = _score(sequence, chat_mode="deep_research")
+    assert metric.score == 1.0, metric.reason
+
+
+def test_a_record_tool_after_sections_is_a_loop_back_in_research_mode():
+    """The record tools are discovery for the order check, so the single-shot
+    no-revisit rule treats them exactly as it treats search_legislation."""
+    ok, detail = _check_tool_order(
+        [_DELEGATE, _SEARCH, _SECTIONS, _DEFINITIONS], "legislation_only"
+    )
+    assert not ok
+    assert "find_definitions called again" in detail
+
+
+def test_missing_reading_step_is_still_missed():
+    metric = _score([_DELEGATE, _SEARCH])
+    assert metric.score < 1.0
+    assert "read the legislation: ✗" in metric.reason

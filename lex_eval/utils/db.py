@@ -822,13 +822,14 @@ def backfill_halt_columns(path: Optional[Path] = None) -> int:
     return filled
 
 
-def backfill_case_law_context(path: Optional[Path] = None) -> int:
+def backfill_retrieval_context(path: Optional[Path] = None) -> int:
     """Re-derive retrieval_context and case_law_context from stored audit_json.
 
-    Case law tool results were read from the wrong place until Sept 2026, so
-    responses gathered before then recorded no retrieved case law even when the
-    Worker found real judgments. The stored audit event holds everything needed,
-    so those rows can be repaired without gathering them again.
+    Use it whenever the capture learns to read a tool it skipped before, e.g.
+    case law results (read from the wrong place until Sept 2026) or the
+    definitions and made-under tools (read from Nov 2026). The stored audit
+    event holds everything needed, so those rows are repaired without
+    gathering them again.
 
     Only rows whose re-derived values differ are written, so this is safe to run
     repeatedly. Returns the number of rows updated.
@@ -1355,7 +1356,7 @@ def _slim_audit(audit_json: Optional[str]) -> Optional[str]:
     the tool's own ``error`` so nothing is lost from the panel.
 
     A copy slimmed this way can no longer re-derive retrieval context via
-    ``backfill_case_law_context``, which reads ``api_calls``. Run that against
+    ``backfill_retrieval_context``, which reads ``api_calls``. Run that against
     ``responses.db``, which keeps the full trace.
     """
     if not audit_json:
@@ -1366,12 +1367,12 @@ def _slim_audit(audit_json: Optional[str]) -> Optional[str]:
         logger.warning("audit_json is not valid JSON; copied unchanged")
         return audit_json
 
-    from lex_eval.reports.diagnostics import _search_outcome
+    from lex_eval.reports.diagnostics import _is_search, _search_outcome
 
     for delegation in audit.get("delegations", []):
         for tool in delegation.get("tools", []):
             name = tool.get("name", "")
-            if name.startswith("search_"):
+            if _is_search(name):
                 count, error = _search_outcome(tool, name)
                 tool["result_count"] = count
                 if error:
@@ -1706,11 +1707,11 @@ if __name__ == "__main__":
         "their placeholder score of 0.0 is kept out of every mean",
     )
     _parser.add_argument(
-        "--backfill-case-law",
+        "--backfill-retrieval",
         action="store_true",
         help="Re-derive retrieval_context and case_law_context from stored "
-        "audit_json, repairing responses gathered before case law tool results "
-        "were read correctly",
+        "audit_json, repairing responses gathered before the capture read a "
+        "tool's results",
     )
     _parser.add_argument(
         "--delete-response",
@@ -1737,8 +1738,8 @@ if __name__ == "__main__":
         completeness_report()
     elif _args.backfill_measured:
         backfill_measured_column()
-    elif _args.backfill_case_law:
-        backfill_case_law_context()
+    elif _args.backfill_retrieval:
+        backfill_retrieval_context()
     elif _args.delete_response is not None:
         delete_response(_args.delete_response)
     elif _args.clean or _args.dry_run:

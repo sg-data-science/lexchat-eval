@@ -918,3 +918,164 @@ class TestDelegationHalts:
         result = audit_capture(_MockClient(lines), "test question", "test-model")
         assert result["delegation_halts"] is None
         assert result["empty_completions"] == 0
+
+
+class TestRecordTools:
+    """find_definitions and find_instruments_made_under feed retrieval_context
+    from their own result, never from the raw rows a definitions search read."""
+
+    DEFINITIONS = {
+        "name": "find_definitions",
+        "args": {"term": "shop"},
+        "raw_result": json.dumps(
+            {
+                "tool": "find_definitions",
+                "term": "shop",
+                "count": 1,
+                "definitions": [
+                    {
+                        "legislation_id": "ukpga/1996/18",
+                        "provision": "section 232",
+                        "definition": '"shop" includes any premises where any retail trade is carried on',
+                    }
+                ],
+                "longer_terms": [
+                    {
+                        "term": "shop worker",
+                        "legislation_id": "ukpga/1996/18",
+                        "provision": "section 232",
+                        "definition": '"shop worker" means an employee who works in a shop',
+                    }
+                ],
+            }
+        ),
+        "api_calls": [
+            {"response": {"results": [{"text": "RAW ROW NEVER SHOWN TO THE MODEL"}]}}
+        ],
+    }
+
+    MADE_UNDER = {
+        "name": "find_instruments_made_under",
+        "args": {"act": "asp/2018/9", "section": "95"},
+        "raw_result": json.dumps(
+            {
+                "tool": "find_instruments_made_under",
+                "status": "found",
+                "act_id": "asp/2018/9",
+                "matched_act": "Social Security (Scotland) Act 2018",
+                "provision": "section/95",
+                "count": 1,
+                "instruments": [
+                    {
+                        "legislation_id": "ssi/2018/275",
+                        "title": "The Social Security Appeals Regulations 2018",
+                        "revocation": "no revocation recorded",
+                    }
+                ],
+                "coverage": {"statement": "SSIs made from 1999 to 2026."},
+            }
+        ),
+        "api_calls": [],
+    }
+
+    def _derive(self, *tools):
+        from lex_eval.utils.audit_capture import derive_retrieval
+
+        return derive_retrieval({"delegations": [{"tools": list(tools)}]})[0]
+
+    def test_definitions_give_their_defining_words(self):
+        ctx = self._derive(self.DEFINITIONS)
+        assert any(
+            "ukpga/1996/18 section 232" in c and "retail trade" in c for c in ctx
+        )
+        assert any('"shop worker" means' in c for c in ctx)
+
+    def test_definitions_raw_rows_are_not_read(self):
+        assert "RAW ROW" not in " ".join(self._derive(self.DEFINITIONS))
+
+    def test_made_under_gives_the_count_coverage_and_each_instrument(self):
+        ctx = " ".join(self._derive(self.MADE_UNDER))
+        assert "1 instrument(s) whose own preamble names section/95" in ctx
+        assert "SSIs made from 1999 to 2026." in ctx
+        assert "(ssi/2018/275): made under section/95 of Social Security" in ctx
+        assert "no revocation recorded" in ctx
+
+    def test_made_under_not_found_gives_nothing(self):
+        tool = copy.deepcopy(self.MADE_UNDER)
+        tool["raw_result"] = json.dumps(
+            {"tool": "find_instruments_made_under", "status": "act_not_in_record"}
+        )
+        assert self._derive(tool) == []
+
+    def test_made_under_text_scan_is_kept_and_other_blocks_are_not(self):
+        """A code-run text scan quotes the instruments it read, so it is
+        retrieved text. The other blocks LexChat appends are guidance."""
+        tool = copy.deepcopy(self.MADE_UNDER)
+        tool["final_result"] = (
+            tool["raw_result"]
+            + "\n\n[ENABLING POWER — You MAY state that each was made under it.]"
+            + "\n\n[SEARCH SCOPE — text scan by code: code read 1 of the 1 "
+            'instruments.\nFound in 1:\n- ssi/2018/275: regulation 3: "£50"]'
+        )
+        ctx = self._derive(tool)
+        assert ctx[-1].startswith("SEARCH SCOPE — text scan by code:")
+        assert 'regulation 3: "£50"' in ctx[-1]
+        assert "ENABLING POWER" not in " ".join(ctx)
+
+    def test_change_record_gives_one_line_per_change_once(self):
+        """Claim Support checks "SSI 2015/331 commenced s.1" against these
+        lines; the guidance LexChat appends to the record is not kept, and a
+        record read twice in one run is not repeated."""
+        record = {
+            "legislation_id": "asp/2014/12",
+            "related": [
+                {
+                    "legislation_id": "ssi/2015/331",
+                    "type_of_effect": "coming into force",
+                    "changes": [{"by": "art. 3", "changed": ["s. 1", None, "s. 2"]}],
+                },
+                {
+                    "legislation_id": "ssi/2016/30",
+                    "type_of_effect": "coming into force",
+                    "changes": [
+                        {
+                            "by": "art. 3",
+                            "changed": ["s. 3"],
+                            "in_force": "2016-04-18",
+                            "qualification": "wholly in force",
+                        }
+                    ],
+                },
+            ],
+        }
+        tool = {
+            "name": "get_legislation_changes",
+            "raw_result": json.dumps(record),
+            "final_result": json.dumps(record) + "\n\n[CHANGE RECORD — you MAY ...]",
+        }
+        ctx = self._derive(tool, copy.deepcopy(tool))
+        assert ctx == [
+            "Change record of asp/2014/12: ssi/2015/331 art. 3, coming into force: "
+            "s. 1, s. 2",
+            "Change record of asp/2014/12: ssi/2016/30 art. 3, coming into force: "
+            "s. 3 (2016-04-18, wholly in force)",
+        ]
+
+    def test_text_code_read_from_legislation_gov_uk_is_kept_once(self):
+        """The model reads the text LexChat's code fetched, so Claim Support
+        must too; a failed read adds nothing."""
+        read = (
+            '{"status": "not_held"}\n\n[PROVISION FETCHED BY CODE — this index '
+            "lacks 2025/119, so code read its text from legislation.gov.uk, the "
+            "official publisher. cite it as https://www.legislation.gov.uk/ssi/"
+            "2025/119/made, and say so.]\nComing into force 10th May 2025\n"
+            "[/PROVISION FETCHED BY CODE]"
+        )
+        failed = (
+            "[PROVISION FETCHED BY CODE — this index lacks 1962 c. 47, and code's "
+            "read of its text from legislation.gov.uk did not complete.]"
+        )
+        lookup = {"name": "lookup_legislation", "final_result": read}
+        text = {"name": "get_legislation_text", "final_result": read}
+        miss = {"name": "lookup_legislation", "final_result": failed}
+        assert self._derive(lookup, text, miss) == ["Coming into force 10th May 2025"]

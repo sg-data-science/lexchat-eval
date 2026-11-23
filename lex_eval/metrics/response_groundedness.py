@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 from typing import Literal
 
 from .base import BaseMetric
@@ -22,6 +23,34 @@ from pydantic import BaseModel
 # 0.983-1.000 on stored runs; mistral-large-3 (which paraphrases) measures
 # 0.095-0.763. 0.95 sits in the gap between the two clusters.
 _NEAR_VERBATIM_THRESHOLD: float = 0.95
+
+# The list LexChat's code adds to the end of a conversational answer, naming
+# instruments its made-under record says were made under a section the answer
+# cites. The Manager never wrote it, and its facts come from the record rather
+# than the research output, so the judge would read every line as invented.
+# Removed before judging, as LexChat's own words.
+_MADE_UNDER_ANSWER_BLOCK = re.compile(
+    r"\n*Instruments made under the sections cited above, from the made-under "
+    r"record[^\n]*\n(?:- [^\n]*(?:\n|\Z))+"
+)
+
+
+# LexChat's code also marks an instrument its made-under record says is revoked,
+# right after the answer names it: "(recorded on legislation.gov.uk as revoked
+# in part, as checked on 2026-10-10)", or "; recorded ..." or " is recorded
+# ..." inside a parenthesis holding the instrument. Same reason for removing it.
+_REVOCATION_MARK = re.compile(
+    r"\s*\(recorded on legislation\.gov\.uk [^()]*\)"
+    r"|(?:;| is) recorded on legislation\.gov\.uk [^()]*(?=\))"
+)
+
+
+def _without_lexchat_notes(answer: str) -> str:
+    """*answer* with LexChat's code-written made-under list and revocation
+    marks removed."""
+    answer = _MADE_UNDER_ANSWER_BLOCK.sub("\n\n", answer)
+    return _REVOCATION_MARK.sub("", answer).strip()
+
 
 # Wrapper for the approved plan's scope note, added to the prompt so the judge
 # treats it as a source alongside the research output. Without it, a true
@@ -145,7 +174,7 @@ class ResponseGroundednessMetric(BaseMetric):
         self.success = False
 
     def measure(self, test_case: LLMTestCase, *args, **kwargs) -> float:
-        actual_output = test_case.actual_output or ""
+        actual_output = _without_lexchat_notes(test_case.actual_output or "")
         ratio = difflib.SequenceMatcher(
             None, actual_output.strip(), self.research_output.strip()
         ).ratio()

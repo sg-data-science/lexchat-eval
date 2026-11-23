@@ -744,7 +744,7 @@ class TestBackfillCaseLawContext:
 
     def test_empty_case_law_context_is_repaired(self, tmp_path):
         from lex_eval.utils.db import (
-            backfill_case_law_context,
+            backfill_retrieval_context,
             get_connection,
             init_db,
             insert_response,
@@ -770,7 +770,7 @@ class TestBackfillCaseLawContext:
         conn.commit()
         conn.close()
 
-        assert backfill_case_law_context(path=db) == 1
+        assert backfill_retrieval_context(path=db) == 1
 
         rec = load_records(path=db)[0]
         assert [c["ncn"] for c in rec["case_law_context"]] == [
@@ -780,7 +780,7 @@ class TestBackfillCaseLawContext:
 
     def test_running_twice_changes_nothing_the_second_time(self, tmp_path):
         from lex_eval.utils.db import (
-            backfill_case_law_context,
+            backfill_retrieval_context,
             get_connection,
             init_db,
             insert_response,
@@ -803,5 +803,5 @@ class TestBackfillCaseLawContext:
         conn.commit()
         conn.close()
 
-        backfill_case_law_context(path=db)
-        assert backfill_case_law_context(path=db) == 0
+        backfill_retrieval_context(path=db)
+        assert backfill_retrieval_context(path=db) == 0

@@ -10,6 +10,7 @@ from lex_eval.testcase import LLMTestCase, ToolCall
 
 from lex_eval.metrics.structure import (
     CitationGroundingMetric,
+    CitationPassthroughMetric,
     CitationReadMetric,
     GenuineGapMetric,
     MandatoryStructureMetric,
@@ -691,6 +692,28 @@ class TestGenuineGapAcceptsTheCurrentWording:
         m = self._measure("Section 4 plainly requires consultation.")
         assert m.score == 0.0
 
+    def test_the_current_research_sentence_scores_full(self):
+        m = self._measure(
+            "The material retrieved in this search does not establish the answer."
+        )
+        assert m.score == 1.0
+
+    def test_made_under_coverage_wording_scores_full(self):
+        """The made-under tool tells the Worker an instrument outside the
+        record's coverage was not checked."""
+        m = self._measure(
+            "The record holds no instrument made under section 117. "
+            "Instruments made before 1987 were not checked."
+        )
+        assert m.score == 1.0
+
+    def test_an_empty_made_under_record_said_plainly_passes_in_conversation(self):
+        m = self._measure(
+            "I found no instrument that names section 117 as its power.",
+            chat_mode="conversational",
+        )
+        assert m.score == 1.0
+
 
 class TestLexChatsOwnBlocksAreNotReadAsTheModelsWords:
     """LexChat appends instruction blocks to a Worker report, in code.
@@ -954,10 +977,10 @@ class TestChangeRecordCountsAsRetrieval:
 
 
 class TestCitationReadNamesTheRoute:
-    """The verdict stays; the explanation stops misdescribing what happened.
+    """A change-record citation passes but is still named; a title-only one fails.
 
     An Act known only from a change record was retrieved, so it is not
-    fabrication, but its text was not pulled, so it is not read. Saying it was
+    fabrication, but its text was not pulled, so it is listed as such. Saying it was
     "cited on the strength of a search result title" is simply untrue, and it
     was untrue of 41 of 44 unread citations across twelve measured responses.
     """
@@ -987,9 +1010,12 @@ class TestCitationReadNamesTheRoute:
         )
         metric = CitationReadMetric()
         metric.measure(self._case("asp/2010/8", changes))
-        assert "known from a change record" in metric.reason
+        assert "Known from a change record" in metric.reason
+        assert "asp/2010/8" in metric.reason
         assert "search result title" not in metric.reason
-        assert metric.score == 0.0  # the verdict is unchanged
+        # Not failed: the change it made is the record's, and whether a claim
+        # goes beyond that change is Claim Support's question.
+        assert metric.score == 1.0
 
     def test_a_search_title_citation_is_still_named_as_such(self):
         search = ToolCall(
@@ -1002,7 +1028,8 @@ class TestCitationReadNamesTheRoute:
         metric = CitationReadMetric()
         metric.measure(self._case("asp/2010/8", search))
         assert "search result title" in metric.reason
-        assert "known from a change record" not in metric.reason
+        assert "Known from a change record" not in metric.reason
+        assert metric.score == 0.0
 
     def test_a_read_citation_still_passes(self):
         read = ToolCall(
@@ -1013,3 +1040,265 @@ class TestCitationReadNamesTheRoute:
         metric = CitationReadMetric()
         metric.measure(self._case("asp/2010/8", read))
         assert metric.score == 1.0
+
+
+class TestRecordToolsCountAsRetrieval:
+    """An instrument listed by find_definitions or find_instruments_made_under
+    was retrieved, with the words the answer relies on, so citing it is
+    neither fabrication nor citing unread. Measured on the v2026.11.1 gather,
+    where every id Citation Grounding called fabricated on the definitions and
+    made-under questions was in one of these two results."""
+
+    def _definitions(self, *ids):
+        return ToolCall(
+            name="Worker: find_definitions",
+            input_parameters={"term": "shop"},
+            output=json.dumps(
+                {
+                    "tool": "find_definitions",
+                    "count": len(ids),
+                    "definitions": [
+                        {"legislation_id": i, "definition": '"shop" means x'}
+                        for i in ids
+                    ],
+                    "longer_terms": [],
+                }
+            )
+            + "\n\n[SEARCH SCOPE — appended by code][/SEARCH SCOPE]",
+        )
+
+    def _made_under(self, status="found", *ids):
+        return ToolCall(
+            name="Worker: find_instruments_made_under",
+            input_parameters={"act": "asp/2018/9", "section": "95"},
+            output=json.dumps(
+                {
+                    "tool": "find_instruments_made_under",
+                    "status": status,
+                    "act_id": "asp/2018/9",
+                    "count": len(ids),
+                    "instruments": [{"legislation_id": i} for i in ids],
+                }
+            )
+            + "\n\n[ENABLING POWER — the made-under record: ...]",
+        )
+
+    def _case(self, report, *tools):
+        return LLMTestCase(
+            input="q",
+            actual_output="final",
+            tools_called=[
+                ToolCall(name="delegate_research", input_parameters={}, output=report),
+                *tools,
+            ],
+        )
+
+    _REPORT = (
+        "[One](http://www.legislation.gov.uk/id/uksi/1967/907) and "
+        "[Two](https://www.legislation.gov.uk/ssi/2020/351)."
+    )
+
+    def test_listed_instruments_are_grounded_and_read(self):
+        case = self._case(
+            self._REPORT,
+            self._definitions("uksi/1967/907"),
+            self._made_under("found", "SSI/2020/351"),
+        )
+        for metric in (CitationGroundingMetric(), CitationReadMetric()):
+            metric.measure(case)
+            assert metric.score == 1.0, metric.reason
+
+    def test_the_made_under_act_is_retrieved_but_not_read(self):
+        from lex_eval.metrics.structure import (
+            _read_legislation_ids,
+            _retrieved_legislation_ids,
+        )
+
+        tools = [self._made_under("found", "ssi/2020/351")]
+        assert "asp/2018/9" in _retrieved_legislation_ids(tools)
+        assert "asp/2018/9" not in _read_legislation_ids(tools)
+
+    def test_made_under_without_a_found_list_contributes_nothing(self):
+        from lex_eval.metrics.structure import _retrieved_legislation_ids
+
+        tools = [self._made_under("act_not_in_record")]
+        assert _retrieved_legislation_ids(tools) == set()
+        assert not _retrieved_usable_content(tools)
+
+    def test_a_list_is_usable_retrieval_for_genuine_gap(self):
+        assert _retrieved_usable_content([self._definitions("ukpga/1996/18")])
+        assert _retrieved_usable_content([self._made_under("found", "ssi/2020/351")])
+        assert not _retrieved_usable_content([self._definitions()])
+
+        metric = GenuineGapMetric()
+        metric.measure(
+            self._case("A confident answer.", self._definitions("ukpga/1996/18"))
+        )
+        assert metric.score == 1.0, metric.reason
+
+    def test_an_unlisted_citation_still_fails(self):
+        case = self._case(
+            "[X](http://www.legislation.gov.uk/id/asp/1999/99).",
+            self._definitions("uksi/1967/907"),
+        )
+        metric = CitationGroundingMetric()
+        metric.measure(case)
+        assert metric.score == 0.0
+        assert "asp/1999/99" in metric.reason
+
+
+class TestCodeSuppliedInstrumentsCountAsRetrieval:
+    """LexChat's code hands the Worker two kinds of evidence inside another
+    tool's result: a section search's list from the made-under record, and the
+    text of an instrument the index lacks, read from legislation.gov.uk. Either
+    instrument was retrieved, so citing it is neither fabrication nor citing
+    unread."""
+
+    _SECTIONS = ToolCall(
+        name="Worker: search_legislation_sections",
+        input_parameters={"legislation_id": "ukpga/1987/26"},
+        output='{"results": []}\n\n[ENABLING POWER — the made-under record, for '
+        "the sections this search returned of the Housing (Scotland) Act 1987 "
+        "(ukpga/1987/26) and the lettered sections beside them: instruments whose "
+        "own preamble names the section given as a power they were made under. "
+        "Made under s.33A: The Homeless Persons (Suspension of Referrals between "
+        "Local Authorities) (Scotland) Order 2022 (ssi/2022/356) (1 more recorded "
+        "on legislation.gov.uk as revoked in whole, not listed). You MAY state ...]",
+    )
+
+    def _lookup(self, read: bool):
+        lead = "[PROVISION FETCHED BY CODE — this index lacks 1962 c. 47"
+        if read:
+            text = (
+                f"{lead}, so code read its text from legislation.gov.uk, the official "
+                "publisher, through the LEX API: the version as enacted. This text "
+                "comes from legislation.gov.uk, a different source from the index: "
+                "cite it as https://www.legislation.gov.uk/ukpga/Eliz2/10-11/47/enacted"
+                ", and say in the report that it was read from legislation.gov.uk.]\n"
+                "117. Regulations ...\n[/PROVISION FETCHED BY CODE]"
+            )
+        else:
+            text = (
+                f"{lead}, and code's read of its text from legislation.gov.uk did not "
+                "complete (no reply), so its text could not be checked here.]"
+            )
+        return ToolCall(
+            name="Worker: lookup_legislation",
+            input_parameters={"legislation_type": "ukpga", "year": 1962, "number": 47},
+            output='{"status": "not_held"}  ' + text,
+        )
+
+    def _case(self, report, *tools):
+        return LLMTestCase(
+            input="q",
+            actual_output="final",
+            tools_called=[
+                ToolCall(name="delegate_research", input_parameters={}, output=report),
+                *tools,
+            ],
+        )
+
+    def test_a_section_search_made_under_list_is_grounded_and_read(self):
+        case = self._case(
+            "[Order](https://www.legislation.gov.uk/id/ssi/2022/356).", self._SECTIONS
+        )
+        for metric in (CitationGroundingMetric(), CitationReadMetric()):
+            metric.measure(case)
+            assert metric.score == 1.0, metric.reason
+
+    def test_text_code_read_from_legislation_gov_uk_is_grounded_read_and_usable(self):
+        report = "[1962 Act](https://www.legislation.gov.uk/ukpga/Eliz2/10-11/47)."
+        case = self._case(report, self._lookup(read=True))
+        for metric in (CitationGroundingMetric(), CitationReadMetric()):
+            metric.measure(case)
+            assert metric.score == 1.0, metric.reason
+        assert _retrieved_usable_content([self._lookup(read=True)])
+
+    def test_a_failed_read_adds_nothing(self):
+        assert not _retrieved_usable_content([self._lookup(read=False)])
+        metric = CitationGroundingMetric()
+        metric.measure(
+            self._case(
+                "[1962 Act](https://www.legislation.gov.uk/ukpga/Eliz2/10-11/47).",
+                self._lookup(read=False),
+            )
+        )
+        assert metric.score == 0.0
+
+
+def test_a_search_result_id_with_a_series_number_matches_its_citation():
+    """LEX lists some old instruments as "uksi/1951/548 (S. 25)"; a citation
+    URL carries only "uksi/1951/548"."""
+    case = LLMTestCase(
+        input="q",
+        actual_output="final",
+        tools_called=[
+            ToolCall(
+                name="delegate_research",
+                input_parameters={},
+                output="[Regs](http://www.legislation.gov.uk/id/uksi/1951/548).",
+            ),
+            ToolCall(
+                name="Worker: search_legislation",
+                input_parameters={"query": "q"},
+                output=json.dumps(
+                    {"results": [{"legislation_id": "uksi/1951/548 (S. 25)"}]}
+                ),
+            ),
+        ],
+    )
+    metric = CitationGroundingMetric()
+    metric.measure(case)
+    assert metric.score == 1.0, metric.reason
+
+
+class TestCitationPassthroughComparesWhereLinksPoint:
+    """The Manager rewrites link forms, so the same legislation arrives as
+    http or https, with or without www and /id/. An answer linking a section
+    of an instrument the Worker linked whole still cites it."""
+
+    def _measure(self, worker, answer):
+        metric = CitationPassthroughMetric()
+        metric.measure(
+            LLMTestCase(
+                input="q",
+                actual_output=answer,
+                tools_called=[
+                    ToolCall(
+                        name="delegate_research", input_parameters={}, output=worker
+                    )
+                ],
+            )
+        )
+        return metric
+
+    def test_a_rewritten_link_form_is_carried_through(self):
+        metric = self._measure(
+            "[SSI](http://www.legislation.gov.uk/id/ssi/2015/331).",
+            "[SSI](https://legislation.gov.uk/ssi/2015/331/).",
+        )
+        assert metric.score == 1.0, metric.reason
+
+    def test_a_section_link_carries_a_whole_instrument_link(self):
+        metric = self._measure(
+            "[Order](http://www.legislation.gov.uk/id/uksi/2012/3073).",
+            "[art. 2](http://www.legislation.gov.uk/id/uksi/2012/3073/article/2).",
+        )
+        assert metric.score == 1.0, metric.reason
+
+    def test_a_dropped_link_still_fails_and_is_named(self):
+        metric = self._measure(
+            "[A](http://www.legislation.gov.uk/id/ssi/2019/71) and "
+            "[B](http://www.legislation.gov.uk/id/ssi/2015/331).",
+            "[B](https://www.legislation.gov.uk/ssi/2015/331).",
+        )
+        assert metric.score == 0.5
+        assert "ssi/2019/71" in metric.reason
+
+    def test_a_whole_instrument_link_does_not_carry_a_section_link(self):
+        metric = self._measure(
+            "[s.10](http://www.legislation.gov.uk/id/ukpga/1978/30/section/10).",
+            "[Act](http://www.legislation.gov.uk/id/ukpga/1978/30) and "
+            "[s.1](http://www.legislation.gov.uk/id/ukpga/1978/30/section/1).",
+        )
+        assert metric.score == 0.5
