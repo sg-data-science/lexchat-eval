@@ -19,7 +19,7 @@ case "$command" in
   help)
     cat <<'EOF'
 Commands:
-  check      sign in to AILA and show its build and models
+  check      test AILA (build and models) and OpenRouter, at no cost
   run        one evaluation run; "run --help" lists its options
   backup     copy the database, keeping the newest seven copies
   dashboard  the results dashboard on port 8501, reached through a tunnel

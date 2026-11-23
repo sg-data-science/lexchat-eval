@@ -9,7 +9,7 @@ After=docker.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/lexchat-eval
-ExecStart=/usr/bin/docker compose --env-file /etc/lexeval/settings.env -f deploy/compose.yml run --rm eval run
+ExecStart=/usr/bin/docker compose --env-file /etc/lexeval/settings.env -f deploy/compose.yml run --rm -T eval run
 # 3 means a run started by hand was still going: nothing is wrong.
 SuccessExitStatus=3
 TimeoutStartSec=6h

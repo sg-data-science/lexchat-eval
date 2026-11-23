@@ -29,8 +29,9 @@ OPENROUTER_JUDGE_MODEL=openai/gpt-4o
 
 ```
 
-Sign in with a LexChat account whose role is `eval`, created by an admin in LexChat's Admin
-Portal, Users. LexChat asks an admin account for a two-step sign-in code, which the harness cannot
+Sign in with a LexChat account whose role is `eval`. The Admin Portal's role list does not offer it,
+so an admin creates the account with the command in
+[the install guide, section 2.3](lex_eval/docs/deploy-ec2.md#23-what-the-aila-admin-must-do-first). LexChat asks an admin account for a two-step sign-in code, which the harness cannot
 give, and it never asks an eval account for one. A new account must sign in once in a browser and
 choose its own password before the harness can use it.
 
@@ -40,7 +41,7 @@ choose its own password before the harness can use it.
 python -m lex_eval.eval_run --dry-run          # what it would gather, and the expected cost
 python -m lex_eval.eval_run                    # conversational questions, two answers each, every metric
 python -m lex_eval.eval_run --chat-mode deep_research --question-id 8 9 --repeats 1
-python -m lex_eval.eval_run --check            # sign in and show LexChat's build and models
+python -m lex_eval.eval_run --check            # test LexChat (build, models) and OpenRouter, at no cost
 python -m lex_eval.eval_run --backup           # copy the database between runs, keeping seven
 ```
 
@@ -519,6 +520,7 @@ this work" and are kept up to date with the code:
 | [Reference answers](lex_eval/docs/reference-answers.md) | The reference ("gold") answer system: what is authored, what is generated. |
 | [Experiments](lex_eval/docs/experiments.md) | Running a gather as an experiment, scoring it, reading and comparing results. |
 | [Question set provenance](lex_eval/docs/question-set-provenance.md) | The fields recording where each question came from. |
+| [Installing on EC2](lex_eval/docs/deploy-ec2.md) | Installing and running the evaluation beside AILA on its EC2 instance, for cloud engineers. |
 | [Decisions](lex_eval/docs/decisions/) | Decision records for choices made or still open. |
 
 `lex_eval/docs/findings/` is the other shelf, for docs that answer "what did we find

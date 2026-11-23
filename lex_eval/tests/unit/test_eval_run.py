@@ -10,10 +10,13 @@ from types import SimpleNamespace
 
 import duckdb
 import pytest
+from httpx2 import ConnectError, MockTransport, Response
+from openai import DefaultHttpxClient, OpenAI
 
 from lex_eval import eval_run
 from lex_eval.eval_run import FAILED, LOCKED, MONEY, OK, Stop
 from lex_eval.gather_responses import _money_stop
+from lex_eval.utils import judge
 
 pytestmark = pytest.mark.unit
 
@@ -233,6 +236,11 @@ class TestRun:
         assert code == MONEY
         assert "stopped: the budget or a LexChat cap was reached" in line
 
+    def test_nothing_to_score_without_a_money_stop_is_a_failure(self, questions_file):
+        self.score_code = eval_run.NOTHING_TO_SCORE
+        code, line = eval_run.run(_args(questions_file))
+        assert code == FAILED and "scoring did not complete" in line
+
     def test_a_broken_gather_fails_without_scoring(self, questions_file):
         self.gather_codes = [FAILED]
         code, line = eval_run.run(_args(questions_file))
@@ -352,6 +360,7 @@ class TestBackup:
 
 def test_check_reports_lexchat_or_why_not(monkeypatch):
     monkeypatch.setattr(eval_run, "check_lexchat", lambda: dict(_LEXCHAT))
+    monkeypatch.setattr(eval_run, "check_openrouter", lambda: "OpenRouter ok")
     code, line = eval_run.check()
     assert (
         code == OK and "v2026.11.10" in line and "summarisation model unknown" in line
@@ -363,3 +372,47 @@ def test_check_reports_lexchat_or_why_not(monkeypatch):
     monkeypatch.setattr(eval_run, "check_lexchat", refuse)
     code, line = eval_run.check()
     assert code == FAILED and "refused" in line
+
+
+class TestCheckOpenRouter:
+    def _check(self, monkeypatch, handler):
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key="k",
+            http_client=DefaultHttpxClient(transport=MockTransport(handler)),
+        )
+        monkeypatch.setattr(judge, "_judge", SimpleNamespace(_client=client))
+        monkeypatch.setattr(eval_run, "check_lexchat", lambda: dict(_LEXCHAT))
+        return eval_run.check()
+
+    def test_an_accepted_key(self, monkeypatch):
+        seen = []
+
+        def handler(request):
+            seen.append((request.method, request.url.path))
+            return Response(200, json={"data": {}})
+
+        code, line = self._check(monkeypatch, handler)
+        assert code == OK and line.endswith("; OpenRouter accepted the key")
+        assert seen == [("GET", "/api/v1/key")]
+
+    def test_a_refused_key(self, monkeypatch):
+        code, line = self._check(monkeypatch, lambda r: Response(401, json={}))
+        assert code == FAILED and "Check OPENROUTER_API_KEY" in line
+
+    def test_a_blocked_host_is_tried_once(self, monkeypatch):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            raise ConnectError("Connection refused")
+
+        code, line = self._check(monkeypatch, handler)
+        assert code == FAILED and len(calls) == 1
+        assert "Connection refused" in line and "openrouter.ai" in line
+
+    def test_no_key_is_not_a_failure(self, monkeypatch):
+        monkeypatch.setattr(judge, "_judge", None)
+        monkeypatch.setattr(eval_run, "check_lexchat", lambda: dict(_LEXCHAT))
+        code, line = eval_run.check()
+        assert code == OK and "OpenRouter not checked" in line

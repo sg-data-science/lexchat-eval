@@ -1,6 +1,7 @@
 # lexchat-eval settings on the AILA instance. Copy to /etc/lexeval/settings.env,
 # owned by root, mode 0600; never commit the copy. One NAME=value per line, with
-# no quotes and no comment after a value (Docker reads this file literally).
+# no comment after a value. Keep secrets to letters, digits and hyphens: Docker
+# Compose treats $, # and quotes specially.
 
 # The image to run: the release tag being installed, e.g. v2026.12.1. The
 # previous image stays on the host for a rollback.

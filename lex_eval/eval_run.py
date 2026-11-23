@@ -5,7 +5,7 @@ write a one-line summary.
     python -m lex_eval.eval_run                                  # the defaults
     python -m lex_eval.eval_run --chat-mode deep_research --question-id 8 9
     python -m lex_eval.eval_run --dry-run                        # what it would do
-    python -m lex_eval.eval_run --check      # sign in and show the build and models
+    python -m lex_eval.eval_run --check      # test LexChat and OpenRouter, at no cost
     python -m lex_eval.eval_run --backup     # copy the database, between runs
 
 With no options it gathers the conversational questions in questions_new.json
@@ -40,6 +40,7 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 import httpx
+from openai import AuthenticationError, OpenAIError
 
 from lex_eval.run_evals import METRIC_FILES
 from lex_eval.utils.db import DEFAULT_DB
@@ -58,8 +59,7 @@ BACKUPS_KEPT = 7
 LONDON = ZoneInfo("Europe/London")
 
 OK, FAILED, MONEY, LOCKED = 0, 1, 2, 3
-# run_evals.py's exit code when the experiment has no answer to score, e.g.
-# every question was refused over a LexChat spending cap.
+# run_evals.py's exit code when there was no answer to score or no test to run.
 NOTHING_TO_SCORE = 5
 
 
@@ -427,7 +427,11 @@ def run(args) -> tuple[int, str]:
                 return OK, "dry run: nothing gathered"
 
             experiment_id, code, outcome = gather_all(args, questions, lexchat, now)
-            if score(experiment_id, args.metrics) not in (0, 1, NOTHING_TO_SCORE):
+            scored = score(experiment_id, args.metrics)
+            # A money stop can leave nothing to score. Otherwise that is a failure:
+            # every answer errored, or pytest found no tests.
+            refused = code == MONEY and scored == NOTHING_TO_SCORE
+            if scored not in (0, 1) and not refused:
                 raise Stop(FAILED, "scoring did not complete")
     except Stop as stop:
         code = stop.code
@@ -475,15 +479,39 @@ def gather_all(args, questions, lexchat, now) -> tuple[str, int, str]:
     return experiment_id, code, outcome
 
 
+def check_openrouter() -> str:
+    """Ask OpenRouter about the judge's key, which costs nothing."""
+    # Imported here: it builds the judge's client, which only --check needs.
+    from lex_eval.utils.judge import _judge
+
+    if _judge is None:
+        return "OpenRouter not checked (no OPENROUTER_API_KEY)"
+    try:
+        client = _judge._client.with_options(max_retries=0, timeout=20)
+        client.get("/key", cast_to=object)
+    except AuthenticationError:
+        raise Stop(
+            FAILED, "OpenRouter refused the key (HTTP 401). Check OPENROUTER_API_KEY."
+        ) from None
+    except OpenAIError as e:
+        raise Stop(
+            FAILED,
+            f"Cannot use OpenRouter ({e.__cause__ or e}). Check that openrouter.ai "
+            "is reachable from here, and the proxy and certificate settings.",
+        ) from None
+    return "OpenRouter accepted the key"
+
+
 def check() -> tuple[int, str]:
-    """Sign in and say what LexChat is running, or why that failed."""
+    """Say what LexChat is running and that the judge is reachable, or why not."""
     try:
         lexchat = check_lexchat()
+        openrouter = check_openrouter()
     except Stop as stop:
         return stop.code, f"failed: {stop}"
     return OK, (
         f"ok: LexChat {lexchat['build']}, model {lexchat['model']}, summarisation "
-        f"model {lexchat['summarisation_model'] or 'unknown'}"
+        f"model {lexchat['summarisation_model'] or 'unknown'}; {openrouter}"
     )
 
 

@@ -14,7 +14,7 @@ decisions are in [`lex_eval/docs/decisions/aws-deployment.md`](../lex_eval/docs/
 | `lexeval-run.service` | systemd unit for one run; the timer starts it, or start it by hand. |
 | `lexeval-run.timer` | Nightly at 02:00 London time. Installed switched off. |
 | `ca/` | A CA bundle for a TLS-inspecting proxy, if there is one. Never committed. |
-| `smoke/` | The smoke test: `deploy/smoke/smoke.sh` runs the image against a stub AILA, at no cost. |
+| `smoke/` | The smoke test: `bash deploy/smoke/smoke.sh` runs the image against a stub AILA, at no cost. |
 
 To update `requirements.lock` after changing the dependencies in `pyproject.toml`, from the repo root
 with [uv](https://docs.astral.sh/uv/) installed:

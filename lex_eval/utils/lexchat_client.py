@@ -101,7 +101,7 @@ def _sign_in(client: httpx.Client, username: str, password: str) -> str:
     if body.get("mfa"):
         raise SignInError(
             f"LexChat asked {username!r} for a two-step sign-in code. Use an account "
-            "with role 'eval' (Admin Portal, Users), which is never asked for one."
+            "created with role 'eval', which is never asked for one."
         )
     if (body.get("user") or {}).get("must_change_password"):
         raise SignInError(

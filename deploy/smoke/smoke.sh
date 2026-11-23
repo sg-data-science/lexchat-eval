@@ -3,12 +3,12 @@
 # (stub_aila.py). Needs Docker with Compose 2.24 or later; no AILA, no
 # OpenRouter key, no cost. From the repo root:
 #
-#   deploy/smoke/smoke.sh                  # or: sudo deploy/smoke/smoke.sh
-#   KEEP_IMAGE=1 deploy/smoke/smoke.sh     # keep the lexeval:smoke image afterwards
+#   bash deploy/smoke/smoke.sh                  # or: sudo bash deploy/smoke/smoke.sh
+#   KEEP_IMAGE=1 bash deploy/smoke/smoke.sh     # keep the lexeval:smoke image afterwards
 #
-# Everything it creates is named lexeval-smoke* and removed at the end, so it
-# leaves no trace of itself and touches nothing of AILA's or the real install's.
-# Full output of every step: deploy/smoke/smoke.log.
+# Everything it creates is named lexeval-smoke* and removed at the end, except
+# Docker's build cache and this log. It touches nothing of AILA's or the real
+# install's. Full output of every step: deploy/smoke/smoke.log.
 
 set -u
 

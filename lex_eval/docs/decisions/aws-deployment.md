@@ -1,7 +1,7 @@
 # Running the evaluation on AILA's EC2 instance
 
 *Decision record, 23 November 2026. Status: decisions D1 to D6 agreed 23 November 2026.
-No code has been written. Checked against AILA (LexChat) `main` at v2026.11.9 plus its unreleased
+Steps 1 to 5 are written; the trial install is not done. Checked against AILA (LexChat) `main` at v2026.11.9 plus its unreleased
 changes, and against this repo at the start of the `aws-migration` branch.*
 
 ## What this proposes
@@ -18,7 +18,8 @@ The container is an extra way to run the harness, not a replacement. `gather_res
 `/api/bot-info`, `/api/system/models` to "unknown". Two things change locally because LexChat changed,
 not because of this work:
 - **Sign in with an eval account.** LexChat now sets up two-step sign-in for `admin` on first use, so the
-  harness cannot sign in as `admin`. Create an account with role `eval` in the local Admin Portal, Users.
+  harness cannot sign in as `admin`. Create an account with role `eval`, which the Admin Portal's role list
+  does not offer, with the command in section 2.3 of the install guide.
 - **Spend caps apply locally too** when LexChat uses OpenRouter. As the local admin, raise them in Admin
   Portal, Cost, if a deep-research run is stopped.
 
@@ -82,6 +83,7 @@ enabled, runs the same command with the settings file's defaults:
 2. **Check AILA.** Sign in with the eval account, then read `/api/version` (build) and
    `/api/system/models` (model and summarisation model). Each failure has its own message: name not
    resolved, sign-in refused, two-step sign-in asked for (not an eval account), endpoint missing.
+   `check` runs this step alone and also tests the OpenRouter key, at no cost; `run` does not.
 3. **Check the budget** (see below). Refuse to start if the run would not fit.
 4. **Gather.** Start a new experiment labelled `<date> <model>`, gather the chosen questions, then
    gather them again into the same experiment for each further repeat, using the existing
@@ -237,7 +239,7 @@ reach.
 | `pypi.org`, `files.pythonhosted.org` | 443 | Python packages | Build |
 | `deb.debian.org` | 80 | Only if the image installs system packages | Build |
 | `openrouter.ai` | 443 | The judge | Every run |
-| `lex.lab.i.ai.gov.uk` | 443 | Reference answer builds | Only when building references |
+| `lex.lab.i.ai.gov.uk` | 443 | Reference answer builds | Never from the instance: references are built elsewhere and come with a release |
 
 Every row on port 443 is HTTPS. AILA's own install guide (`DOCKER_EC2_INSTALL.md`, section 1.3) already
 allows every row: the build-time rows for its own clone and image build, `lex.lab.i.ai.gov.uk` always,
@@ -267,13 +269,16 @@ Each step is its own reviewable change:
 5. The install guide.
 6. The trial install, with disk, memory, time and cost measured for the guide.
 
-## Two sign-in facts for the install guide
+## Three sign-in facts for the install guide
 
 Found in AILA's code while building the client, and not in the original brief:
 - **A new account must choose its own password first.** AILA marks every account an admin creates as
   "must change password", and refuses every other request until it does. Someone signs in once as the
   eval account in a browser and sets the password that then goes into the settings file. The harness
   says so if this step was missed.
+- **The Admin Portal cannot create an eval account.** Its role list offers User and Admin only. AILA's
+  API accepts the role, so an admin creates the account with one browser-console command. An account
+  that first signs in with another role is made to set up two-step sign-in, and keeps it.
 - **Okta blocks eval accounts.** When AILA's sign-in method is Okta, it refuses a password sign-in for
   every account except admins, eval accounts included. The harness cannot sign in on such an instance
   until AILA allows it, which is a change to AILA and a question for its developer.
