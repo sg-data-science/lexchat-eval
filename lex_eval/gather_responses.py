@@ -16,6 +16,11 @@ Usage:
     python -m lex_eval.gather_responses --verbose-capture
     python -m lex_eval.gather_responses --chat-mode deep_research
     python -m lex_eval.gather_responses --questions data/questions_new.json --question-id 7 8 9
+    python -m lex_eval.gather_responses --budget-usd 5
+
+Exits 2 when it stopped early over money: --budget-usd was reached, or LexChat
+refused an answer over one of its spending caps. Questions not yet started are
+then left ungathered rather than stored as errors.
 """
 
 from __future__ import annotations
@@ -32,13 +37,24 @@ from pathlib import Path
 from typing import Any, Dict, IO, List, Optional
 
 from lex_eval.utils.audit_capture import audit_capture
-from lex_eval.utils.db import get_connection, insert_response, init_db, clear_responses
+from lex_eval.utils.db import (
+    DEFAULT_DB,
+    clear_responses,
+    get_connection,
+    init_db,
+    insert_response,
+)
 from lex_eval.utils.get_llm import (
     get_active_model,
     get_lexchat_build,
     get_summarisation_model,
 )
-from lex_eval.utils.lexchat_client import get_authenticated_client
+from lex_eval.utils.lexchat_client import (
+    SPEND_CAP_ERROR_PREFIX,
+    error_detail,
+    get_authenticated_client,
+    is_spend_cap_refusal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +138,10 @@ def process_question(
                     plan_response.raise_for_status()
                     plan_data = plan_response.json()
                     break
+                if is_spend_cap_refusal(error_detail(plan_response)):
+                    raise RuntimeError(
+                        SPEND_CAP_ERROR_PREFIX + error_detail(plan_response)
+                    )
                 logger.warning(
                     "Q%d: planner returned HTTP %d on attempt %d/%d%s",
                     question_id,
@@ -225,7 +245,10 @@ def process_question(
             if capture_result.get("timed_out"):
                 failure_phrase = "stream timed out"
 
-            if actual_output and not failure_phrase:
+            # Retrying a request LexChat refused over a spending cap only gets
+            # the same refusal, so it is stored at once, with any cost it ran up.
+            refused = is_spend_cap_refusal(capture_error_message)
+            if (actual_output and not failure_phrase) or refused:
                 result = {
                     "question_id": question_id,
                     "question": question,
@@ -267,7 +290,9 @@ def process_question(
                 # If the capture layer observed an error (e.g. the audit event
                 # carried an error), add the "error" key so insert_response
                 # treats this as an error row consistently.
-                if capture_is_error and capture_error_message:
+                if refused:
+                    result["error"] = SPEND_CAP_ERROR_PREFIX + capture_error_message
+                elif capture_is_error and capture_error_message:
                     result["error"] = capture_error_message
                 return result
             else:
@@ -335,6 +360,15 @@ def process_question(
         client.close()
 
 
+def _money_stop(error: Optional[str], spent: float, budget: Optional[float]) -> str:
+    """Why the gather must stop starting questions, or "" to carry on."""
+    if error and error.startswith(SPEND_CAP_ERROR_PREFIX):
+        return "LexChat refused an answer over a spending cap"
+    if budget is not None and spent >= budget:
+        return f"the budget of ${budget:.2f} is reached (${spent:.2f} spent)"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -358,6 +392,12 @@ def main() -> None:
         "--verbose-capture",
         action="store_true",
         help="Write per-question verbose audit logs to lex_eval/data/verbose_logs/",
+    )
+    parser.add_argument(
+        "--budget-usd",
+        type=float,
+        default=None,
+        help="Stop starting new questions once the answers so far have cost this much on LexChat",
     )
     parser.add_argument(
         "--threads",
@@ -434,9 +474,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     base = Path(__file__).parent
     questions_path = args.questions or (base / "data" / "questions.json")
-    db_path = base / "data" / "responses.db"
-    debug_events_path = base / "data" / "debug_events.jsonl"
-    verbose_logs_dir = base / "data" / "verbose_logs"
+    db_path = DEFAULT_DB
+    debug_events_path = DEFAULT_DB.parent / "debug_events.jsonl"
+    verbose_logs_dir = DEFAULT_DB.parent / "verbose_logs"
 
     if not questions_path.exists():
         logger.error("Questions file not found at %s", questions_path)
@@ -466,8 +506,8 @@ def main() -> None:
 
     summ_model_name, summ_provider = get_summarisation_model()
     if summ_model_name is None:
-        summ_model_name = model_name
-    if summ_model_name == model_name:
+        logger.info("Summarisation LLM: unknown (recorded as NULL)")
+    elif summ_model_name == model_name:
         logger.info("Summarisation LLM: %s (same as active model)", summ_model_name)
     else:
         logger.info("Summarisation LLM: %s", summ_model_name)
@@ -571,12 +611,25 @@ def main() -> None:
         verbose_logs_dir.mkdir(exist_ok=True)
         logger.info("Writing verbose capture logs to %s", verbose_logs_dir)
 
+    spent = 0.0
+    stopped_for = ""
+    futures = {}
+
+    def stop_if_over(error):
+        """Cancel the questions not yet started once a money limit is hit."""
+        nonlocal stopped_for
+        stop = _money_stop(error, spent, args.budget_usd)
+        if stop and not stopped_for:
+            stopped_for = stop
+            logger.warning("Stopping: %s. Questions not started are skipped.", stop)
+            for f in futures:
+                f.cancel()
+
     try:
         # ------------------------------------------------------------------
         # Gather responses concurrently
         # ------------------------------------------------------------------
         with ThreadPoolExecutor(max_workers=args.threads) as executor:
-            futures = {}
             for q in pending:
                 # Build verbose log path for this question (per-question, not per-attempt)
                 verbose_log_path = None
@@ -601,9 +654,13 @@ def main() -> None:
 
             for future in as_completed(futures):
                 q = futures[future]
+                if future.cancelled():
+                    continue
                 try:
                     result = future.result()
                     save_response(db_conn, result)
+                    spent += result.get("total_cost_usd") or 0.0
+                    stop_if_over(result.get("error"))
                     # Error records are signalled by an "error" key (and may not
                     # set is_error), so check both to avoid logging failures as OK.
                     # A clarification request is a valid outcome, not an error.
@@ -623,6 +680,7 @@ def main() -> None:
                     )
                 except Exception as exc:
                     logger.error("Q%d failed: %s", q["id"], exc)
+                    stop_if_over(str(exc))
                     save_response(
                         db_conn,
                         {
@@ -667,7 +725,9 @@ def main() -> None:
         )
         db_conn.close()
 
-    logger.info("Done gathering responses.")
+    logger.info("Done gathering responses. LexChat cost: $%.2f", spent)
+    if stopped_for:
+        sys.exit(2)
 
 
 if __name__ == "__main__":

@@ -8,21 +8,22 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.0",
-    "google-genai",
     "httpx>=0.27.0",
     "numpy",
     "openai",
     "pydantic",
+    # run_evals.py scores by running the eval tests under pytest, in parallel.
+    "pytest",
+    "pytest-xdist",
     "python-dotenv>=1.0.0",
     "scikit-learn",
     "streamlit>=1.31.0",
+    "tzdata",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
     "pytest-asyncio",
-    "pytest-xdist",
     "black",
     "ruff",
 ]

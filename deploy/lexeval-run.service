@@ -1,0 +1,15 @@
+# One evaluation run of AILA, started by lexeval-run.timer or by hand:
+#   sudo systemctl start lexeval-run.service
+# Assumes the repo is checked out at /opt/lexchat-eval.
+[Unit]
+Description=lexchat-eval: one evaluation run of AILA
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/lexchat-eval
+ExecStart=/usr/bin/docker compose --env-file /etc/lexeval/settings.env -f deploy/compose.yml run --rm eval run
+# 3 means a run started by hand was still going: nothing is wrong.
+SuccessExitStatus=3
+TimeoutStartSec=6h

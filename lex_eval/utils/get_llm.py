@@ -34,76 +34,71 @@ def get_active_model() -> Tuple[Optional[str], Optional[str]]:
 
 def get_summarisation_model() -> Tuple[Optional[str], Optional[str]]:
     """
-    Return the summarisation model configured in LexChat's admin portal.
+    Return the summarisation model LexChat actually uses, and its provider.
 
-    Calls the admin-only /api/developer/provider-config endpoint to read
-    summarisation_model from the active provider's config blob.  Mirrors the
-    server-side fallback: if summarisation_model is blank, the main model is
-    returned (because that is what LexChat actually uses for summarisation).
-
-    Returns:
-        Tuple of (model_name, provider).  Both are None only when the active
-        model itself cannot be resolved.
+    Read from /api/system/models, which an eval account may call. On a LexChat
+    too old to have it, the admin-only /api/developer/provider-config is tried
+    instead. When neither answers, both values are None: the model is unknown.
+    It is never assumed to be the main model.
     """
     client = get_authenticated_client()
     try:
-        # Resolve the main model and active provider first (needed for fallback).
-        models_response = client.get("/api/models")
-        models_response.raise_for_status()
-        main_model: Optional[str] = None
-        active_provider: Optional[str] = None
-        for m in models_response.json():
-            if m.get("active") is True:
-                main_model = m.get("name")
-                active_provider = m.get("provider", "").lower()
-                break
-
-        if main_model is None:
-            return None, None
-
-        # Read the full provider config (admin endpoint).
-        # Fall back to the main model gracefully if the endpoint is unavailable.
-        try:
-            cfg_response = client.get("/api/developer/provider-config")
-            cfg_response.raise_for_status()
-            data = cfg_response.json()
-        except Exception as exc:
-            logger.warning(
-                "Could not read provider config (%s); summarisation model defaults to main model.",
-                exc,
-            )
-            return main_model, active_provider
-
-        # Use the resolved provider_key for both config lookup and return value.
-        provider_key = active_provider or data.get("active_provider", "ollama")
-        provider_cfgs = {
-            p["id"]: p.get("config", {}) for p in data.get("providers", [])
-        }
-        cfg = provider_cfgs.get(provider_key, {})
-
-        # Match server-side: cfg.get("summarisation_model") or model
-        summ_model = cfg.get("summarisation_model") or main_model
-        return summ_model, provider_key
+        resp = client.get("/api/system/models")
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("summarisation_model") or None, data.get("active_provider")
+        logger.info(
+            "/api/system/models returned HTTP %d; trying the admin provider settings",
+            resp.status_code,
+        )
+        return _summarisation_from_provider_config(client)
     finally:
         client.close()
 
 
+def _summarisation_from_provider_config(client) -> Tuple[Optional[str], Optional[str]]:
+    """The summarisation model from the admin-only provider settings (older LexChat)."""
+    resp = client.get("/api/developer/provider-config")
+    if resp.status_code != 200:
+        logger.warning(
+            "Summarisation model unknown: /api/developer/provider-config returned "
+            "HTTP %d (admin only).",
+            resp.status_code,
+        )
+        return None, None
+    data = resp.json()
+    provider = data.get("active_provider")
+    cfgs = {p["id"]: p.get("config", {}) for p in data.get("providers", [])}
+    cfg = cfgs.get(provider, {})
+    # LexChat summarises with the main model when no separate one is set.
+    return cfg.get("summarisation_model") or cfg.get("model") or None, provider
+
+
 def get_lexchat_build() -> str:
     """
-    Return the LexChat build the server reports, e.g. "v2026.09.3".
+    Return the LexChat build the server reports, e.g. "v2026.09.3-2-gabc1234".
 
-    Read from /api/bot-info, which gives the exact build ("v2026.09.3-2-gabc1234"
-    when the server runs past a release) and the release alone ("2026.09.3") when
-    the server has no git history. Returns "n/a" for a server that reports
-    neither, as builds before v2026.09.3 do.
+    Read from /api/version. On a LexChat older than v2026.11.2, which has no
+    /api/version, /api/bot-info is read instead, as it then carried the build.
+    Either gives the release alone ("2026.09.3") when the server has no git
+    history. Returns "n/a" when neither reports one, as builds before
+    v2026.09.3 do not, or when LexChat cannot be reached.
     """
-    client = get_authenticated_client()
     try:
-        response = client.get("/api/bot-info")
-        response.raise_for_status()
-        info = response.json()
+        client = get_authenticated_client()
     except Exception as exc:
-        logger.warning("Could not read LexChat build from /api/bot-info (%s)", exc)
+        logger.warning("Could not read the LexChat build (%s)", exc)
+        return "n/a"
+    try:
+        info = {}
+        for path in ("/api/version", "/api/bot-info"):
+            resp = client.get(path)
+            if resp.status_code == 200:
+                info = resp.json()
+                if info.get("build"):
+                    break
+    except Exception as exc:
+        logger.warning("Could not read the LexChat build (%s)", exc)
         return "n/a"
     finally:
         client.close()
@@ -131,3 +126,8 @@ if __name__ == "__main__":
             print(
                 f"Summarisation model:           {summ_model}  (provider: {summ_provider})"
             )
+    else:
+        print(
+            "Summarisation model:           unknown (LexChat gave no summarisation "
+            "model to this account)"
+        )

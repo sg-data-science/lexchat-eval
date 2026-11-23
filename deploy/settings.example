@@ -1,0 +1,48 @@
+# lexchat-eval settings on the AILA instance. Copy to /etc/lexeval/settings.env,
+# owned by root, mode 0600; never commit the copy. One NAME=value per line, with
+# no quotes and no comment after a value (Docker reads this file literally).
+
+# The image to run: the release tag being installed, e.g. v2026.12.1. The
+# previous image stays on the host for a rollback.
+IMAGE_TAG=local
+
+# AILA, by name on its own network. Never an IP address.
+LEXCHAT_API=http://nginx:8080
+
+# AILA's account for the evaluation, role "eval" (secret: PASSWORD).
+USERNAME=eval
+PASSWORD=
+
+# The judge, through OpenRouter (secret: OPENROUTER_API_KEY). These match the
+# settings the existing scores were made with; a different judge makes new scores
+# incomparable with them.
+OPENROUTER_API_KEY=
+OPENROUTER_JUDGE_MODEL=openai/gpt-5.6-luna
+OPENROUTER_JUDGE_TEMPERATURE=0.0
+OPENROUTER_JUDGE_MAX_TOKENS=16000
+OPENROUTER_JUDGE_REASONING_EFFORT=low
+OPENROUTER_JUDGE_FALLBACK_MODEL=openai/gpt-5-mini
+# Answers scored at once. Each uses memory, within the container's 2 GB.
+EVAL_WORKERS=4
+
+# Longest silence on an answer's stream before giving up, in seconds. AILA's
+# nginx gives up after 600.
+LEXCHAT_TIMEOUT=600
+
+# What a run covers when started with no options.
+EVAL_QUESTIONS=lex_eval/data/questions_new.json
+EVAL_CHAT_MODE=conversational
+EVAL_REPEATS=2
+EVAL_METRICS=all
+EVAL_THREADS=2
+
+# The most to spend on AILA in one day, in USD. AILA's own cap for one account
+# is $20 a day by default.
+EVAL_BUDGET_USD=10
+
+# Only behind an outbound proxy. NO_PROXY keeps traffic to AILA off the proxy.
+# SSL_CERT_FILE replaces the trusted certificates, so it must be a full bundle:
+# the usual public ones plus the proxy's own.
+# HTTPS_PROXY=http://proxy.example:3128
+# NO_PROXY=nginx,localhost
+# SSL_CERT_FILE=/etc/lexeval/ca/bundle.pem

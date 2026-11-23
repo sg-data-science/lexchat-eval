@@ -1,0 +1,63 @@
+# lexchat-eval beside AILA on one host. Install guide: lex_eval/docs/deploy-ec2.md.
+# Every command is run from the repo root, with the settings file outside it:
+#
+#   sudo docker compose --env-file /etc/lexeval/settings.env -f deploy/compose.yml build eval
+#   sudo docker compose --env-file /etc/lexeval/settings.env -f deploy/compose.yml run --rm eval check
+#   sudo docker compose --env-file /etc/lexeval/settings.env -f deploy/compose.yml run --rm eval run
+#
+# "build eval", not "build": eval sits in a profile, so a bare build builds nothing.
+#
+# It joins AILA's network to reach AILA as http://nginx:8080 and publishes no
+# port: Docker's published ports bypass the host firewall, and AILA's rule is
+# that only its nginx publishes one. Nothing here changes AILA.
+
+name: lexeval
+
+x-eval: &eval
+  image: lexeval:${IMAGE_TAG:-local}
+  pull_policy: never # built here from a release tag, never pulled
+  env_file:
+    # LEXEVAL_SETTINGS and AILA_NETWORK exist for the smoke test (deploy/smoke/);
+    # on the server, leave both unset.
+    - path: ${LEXEVAL_SETTINGS:-/etc/lexeval/settings.env}
+      required: true
+  networks: [aila_app]
+  volumes:
+    - data:/var/lib/lexeval
+    - backups:/var/backups/lexeval
+    # Extra CA certificates (a TLS-inspecting proxy): put the bundle in deploy/ca/
+    # and set SSL_CERT_FILE=/etc/lexeval/ca/<file> in the settings file.
+    - ./ca:/etc/lexeval/ca:ro
+  read_only: true
+  tmpfs:
+    - /tmp:size=512m,mode=1777
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 512
+  mem_limit: ${EVAL_MEM_LIMIT:-2g}
+
+services:
+  # One-off commands: run --rm eval check | run | backup | help
+  eval:
+    <<: *eval
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    profiles: [commands]
+
+  # Optional: --profile dashboard up -d. Listens on port 8501 of its own
+  # address on aila_app only; read it through an SSH or SSM tunnel.
+  dashboard:
+    <<: *eval
+    command: ["dashboard"]
+    restart: unless-stopped
+    profiles: [dashboard]
+
+networks:
+  aila_app:
+    external: true
+    name: ${AILA_NETWORK:-aila_app}
+
+volumes:
+  data:
+  backups:

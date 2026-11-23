@@ -127,6 +127,7 @@ def test_gather_entrypoint_records_and_rejoins_experiment(tmp_path, monkeypatch)
     monkeypatch.setattr(
         gather, "get_summarisation_model", lambda: ("summary", "provider")
     )
+    monkeypatch.setattr(gather, "get_lexchat_build", lambda: "build")
     monkeypatch.setattr(versioning, "revision", lambda: "revision")
     monkeypatch.setattr(versioning, "capture_version", lambda: "capture")
 

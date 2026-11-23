@@ -35,9 +35,10 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 LEX_API_URL = os.getenv("LEX_API_URL", "https://lex.lab.i.ai.gov.uk").rstrip("/")
 
-# The target deployment sits behind SSL inspection, so TLS verification is off
-# by default to match LexChat. Set to "true" if pointed at a normal HTTPS endpoint.
-LEX_API_TLS_VERIFY = os.getenv("LEX_API_TLS_VERIFY", "false").strip().lower() == "true"
+# TLS is verified by default, as LexChat's own outbound calls are
+# (OUTBOUND_TLS_VERIFY). Behind a TLS-inspecting proxy, supply its CA with
+# SSL_CERT_FILE rather than turning this off.
+LEX_API_TLS_VERIFY = os.getenv("LEX_API_TLS_VERIFY", "true").strip().lower() == "true"
 
 # LexChat's production values (executor.py), with no research filters active.
 SEARCH_LIMIT = 5

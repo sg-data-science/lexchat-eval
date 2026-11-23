@@ -386,7 +386,7 @@ def run_evals(
 
         if overall_rc in (0, 1):
             print(
-                "\n📊 Results written to data/responses.db (one eval_<metric> table per metric)"
+                f"\n📊 Results written to {DEFAULT_DB} (one eval_<metric> table per metric)"
                 "\n   View dashboard: streamlit run lex_eval/reports/streamlit_report.py"
             )
         run_status = "finished" if overall_rc in (0, 1) else "incomplete"
@@ -414,7 +414,7 @@ Metrics:
   citation_passthrough         Worker citations reach the final response (fast, offline)
   citation_grounding           Cited Acts were actually retrieved (fast, offline)
   citation_read                Cited Acts had their text read, not just their title seen (fast, offline)
-  citation_domain               Citations point to legislation.gov.uk (fast, offline)
+  citation_domain               Citations point to a domain the Worker prompt permits (fast, offline)
   genuine_gap                  Failed retrieval is disclosed, not glossed over (fast, offline)
   step_completion               Every step's own retrieval reached its own report, deep research only (fast, offline)
   report_integration            Every step's finding reached the final answer, deep research only (needs OPENROUTER_API_KEY)

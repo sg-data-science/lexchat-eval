@@ -9,6 +9,7 @@ import pytest
 from lex_eval.testcase import LLMTestCase, ToolCall
 
 from lex_eval.metrics.structure import (
+    CitationDomainMetric,
     CitationGroundingMetric,
     CitationPassthroughMetric,
     CitationReadMetric,
@@ -1302,3 +1303,26 @@ class TestCitationPassthroughComparesWhereLinksPoint:
             "[s.1](http://www.legislation.gov.uk/id/ukpga/1978/30/section/1).",
         )
         assert metric.score == 0.5
+
+
+class TestCitationDomainAllowsScottishJudgments:
+    """LexChat searches Scottish courts' judgments by default from November
+    2026 and tells the Worker to link one to its scotcourts.gov.uk PDF."""
+
+    _SCOTTISH = (
+        "[Smith v Jones](https://www.scotcourts.gov.uk/media/abcd/2025csoh12.pdf)"
+    )
+
+    def _score(self, mode: str, report: str) -> float:
+        return CitationDomainMetric(research_mode=mode).measure(_test_case(report))
+
+    def test_a_scottish_judgment_passes_in_both_case_law_modes(self):
+        assert self._score("case_law_only", self._SCOTTISH) == 1.0
+        assert self._score("legislation_and_case_law", self._SCOTTISH) == 1.0
+
+    def test_a_scottish_judgment_still_fails_legislation_only(self):
+        assert self._score("legislation_only", self._SCOTTISH) == 0.0
+
+    def test_a_look_alike_host_is_not_scotcourts(self):
+        report = "[X](https://scotcourts.gov.uk.example.com/a.pdf)"
+        assert self._score("case_law_only", report) == 0.0
