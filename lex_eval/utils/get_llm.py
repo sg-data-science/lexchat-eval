@@ -8,19 +8,27 @@ logger = logging.getLogger(__name__)
 
 def get_active_model() -> Tuple[Optional[str], Optional[str]]:
     """
-    Query LexChat's /api/models endpoint and find the active model.
+    Return the model LexChat will answer with, and its provider.
 
-    The active model is the one configured in LexChat's admin portal. This is
-    the model that will actually process requests. The eval does not select or
-    override the model; it reads it from the API.
+    Read from /api/system/models, which gives the configured model. Only a
+    LexChat too old to have it (404) falls back to the "active" flag in
+    /api/models, which names the wrong model when LexChat's list lacks the
+    configured one: it then flags the first in the list.
 
     Returns:
         Tuple of (model_name, provider) where both are None if no active model
-        was found. Provider is the provider name ("ollama" or "openrouter") for
+        was found. Provider is the provider name (e.g. "openrouter") for
         informational purposes only.
     """
     client = get_authenticated_client()
     try:
+        resp = client.get("/api/system/models")
+        if resp.status_code != 404:
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("model"):
+                return None, None
+            return data["model"], (data.get("active_provider") or "").lower()
         models_response = client.get("/api/models")
         models_response.raise_for_status()
         models = models_response.json()

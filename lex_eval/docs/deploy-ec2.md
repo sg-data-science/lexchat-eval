@@ -468,7 +468,7 @@ Section 8's costs and section 5's time come from runs on a developer's machine.
 | `asked 'eval' for a two-step sign-in code` | The account's role is not `eval`, or it set up two-step sign-in before it was. | An admin deletes it and creates it again (section 2.3). |
 | `must set its own password before it can be used` | Nobody has signed in as the account in a browser, or an admin has reset its password. | Section 2.3, "Set its real password". |
 | `signs in through Okta` (HTTP 403) | AILA uses Okta, which refuses this account. | AILA's developer has to decide. |
-| `check` says `ok`, but every answer in the run fails with 403 | The account's role is not `eval`. `check` does not notice this where AILA has two-step sign-in switched off. | An admin deletes it and creates it again (section 2.3). |
+| `LexChat answered with an error` and a 403 on `/api/system/models` | The account's role is not `eval`. On AILA `v2026.11.9` or older, with two-step sign-in switched off, `check` says `ok` and the answers fail with 403 instead. | An admin deletes it and creates it again (section 2.3). |
 | Summarisation model `unknown`, or a 404 on `/api/system/models` in the log | AILA is `v2026.11.9` or older. | Nothing. It is recorded as unknown, and the run works. |
 | `LexChat has no active model` | No model is set in AILA. | An admin sets one in Admin Portal, Developer. |
 | `OpenRouter refused the key (HTTP 401)` | The OpenRouter key is wrong. | Correct `OPENROUTER_API_KEY`. |

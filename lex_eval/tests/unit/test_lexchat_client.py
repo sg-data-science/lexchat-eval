@@ -1,6 +1,6 @@
 """
 Unit tests for signing in to LexChat and the reads made before a gather:
-the build, and the summarisation model. LexChat is replaced by an
+the build, and the models. LexChat is replaced by an
 ``httpx.MockTransport``, so nothing leaves the machine.
 """
 
@@ -133,6 +133,58 @@ class TestSpendCapRefusal:
         assert not is_spend_cap_refusal("the AI provider returned HTTP 429")
         assert not is_spend_cap_refusal("")
         assert not is_spend_cap_refusal(None)
+
+
+# ---------------------------------------------------------------------------
+# The active model
+# ---------------------------------------------------------------------------
+
+
+# LexChat flags the first model listed when the configured one is not in its list.
+_WRONG_FLAG = [
+    {"name": "sonnet-4-6", "provider": "openrouter", "active": True},
+    {"name": "opus", "provider": "openrouter", "active": False},
+]
+
+
+class TestActiveModel:
+    def test_the_configured_model_wins_over_the_active_flag(self, monkeypatch):
+        configured = {"active_provider": "openrouter", "model": "sonnet-5.5"}
+        _use(
+            monkeypatch,
+            _lexchat(
+                {
+                    "/api/system/models": (200, configured),
+                    "/api/models": (200, _WRONG_FLAG),
+                }
+            ),
+        )
+        assert get_llm.get_active_model() == ("sonnet-5.5", "openrouter")
+
+    def test_an_older_lexchat_falls_back_to_the_active_flag(self, monkeypatch):
+        _use(monkeypatch, _lexchat({"/api/models": (200, _WRONG_FLAG)}))
+        assert get_llm.get_active_model() == ("sonnet-4-6", "openrouter")
+
+    @pytest.mark.parametrize("status", [403, 500])
+    def test_an_error_is_raised_rather_than_read_from_the_flag(
+        self, monkeypatch, status
+    ):
+        _use(
+            monkeypatch,
+            _lexchat(
+                {
+                    "/api/system/models": (status, {"detail": "no"}),
+                    "/api/models": (200, _WRONG_FLAG),
+                }
+            ),
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            get_llm.get_active_model()
+
+    def test_no_model_configured(self, monkeypatch):
+        reply = {"active_provider": "openrouter", "model": ""}
+        _use(monkeypatch, _lexchat({"/api/system/models": (200, reply)}))
+        assert get_llm.get_active_model() == (None, None)
 
 
 # ---------------------------------------------------------------------------

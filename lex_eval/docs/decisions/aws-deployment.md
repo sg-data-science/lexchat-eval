@@ -156,6 +156,7 @@ a paid rescore of every experiment being compared.
 |---|---|
 | Sign-in: a clear error when AILA asks for a second step | capture |
 | Summarisation model from `/api/system/models`; unknown on a 404, never the main model | capture |
+| Main model from `/api/system/models`; from `/api/models` only on a 404, because its active flag can name the wrong model | capture |
 | Build from `/api/version`, with the sign-in inside the error handling | capture |
 | Recognise a spend-cap refusal | capture |
 | `LEX_API_TLS_VERIFY` defaults to true | neither (reference builds only) |

@@ -332,7 +332,7 @@ def audit_capture(
     question:
         The natural-language legal question to evaluate.
     model_name:
-        The LLM model name as returned by ``/api/models``.
+        The LLM model name LexChat is configured with.
     research_mode:
         ``legislation_only``, ``case_law_only``, or ``legislation_and_case_law``.
     chat_mode:
