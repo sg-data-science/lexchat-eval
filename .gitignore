@@ -223,6 +223,8 @@ lex_eval/data/session_transcripts
 lexchat-eval-streamlit/
 lex_eval/data/debug_events.jsonl
 lex_eval/data/verbose_logs/
+lex_eval/data/eval_run.lock
+lex_eval/data/eval_runs.log
 
 # Session transcript exports, the categorized copies, and the consistency review
 # that the feedback notebook reads and writes.
@@ -258,3 +260,8 @@ lex_eval/docs/findings/
 lex_eval/data/reference_answers/reviews/
 *.docx
 *.docx.bak
+
+# CA bundles for a TLS-inspecting proxy, kept on the server only.
+deploy/ca/*
+!deploy/ca/README.md
+deploy/smoke/smoke.log

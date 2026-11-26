@@ -18,9 +18,9 @@ Create `lex_eval/.env` (see `lex_eval/.env.example`):
 # LexChat API Configuration
 LEXCHAT_API=http://host.docker.internal:80
 
-# Authentication
-USERNAME=admin
-PASSWORD=admin
+# Authentication: a LexChat account with role "eval" (see below)
+USERNAME=eval
+PASSWORD=change-me
 
 # OpenRouter judge (judge LLM for AI-as-judge metrics)
 OPENROUTER_API_KEY=yourkeyhere
@@ -28,6 +28,36 @@ OPENROUTER_API_KEY=yourkeyhere
 OPENROUTER_JUDGE_MODEL=openai/gpt-4o
 
 ```
+
+Sign in with a LexChat account whose role is `eval`. The Admin Portal's role list does not offer it,
+so an admin creates the account with the command in
+[the install guide, section 2.3](lex_eval/docs/deploy-ec2.md#23-what-the-aila-admin-must-do-first). LexChat asks an admin account for a two-step sign-in code, which the harness cannot
+give, and it never asks an eval account for one. A new account must sign in once in a browser and
+choose its own password before the harness can use it.
+
+## One command for a whole run
+
+```bash
+python -m lex_eval.eval_run --dry-run          # what it would gather, and the expected cost
+python -m lex_eval.eval_run                    # conversational questions, two answers each, every metric
+python -m lex_eval.eval_run --chat-mode deep_research --question-id 8 9 --repeats 1
+python -m lex_eval.eval_run --check            # test LexChat (build, models) and OpenRouter, at no cost
+python -m lex_eval.eval_run --backup           # copy the database between runs, keeping seven
+```
+
+`eval_run` does Steps 1 to 3 in one go. It checks LexChat and records its build and models, gathers
+the chosen questions into one new experiment, scores them, and prints one summary line, also appended
+to `lex_eval/data/eval_runs.log`. With no options it gathers the conversational questions in
+`questions_new.json` twice each and scores every metric. Each option overrides an `EVAL_*` setting in
+`lex_eval/.env` for that run only: `EVAL_QUESTIONS`, `EVAL_QUESTION_IDS`, `EVAL_CHAT_MODE`,
+`EVAL_REPEATS`, `EVAL_METRICS`, `EVAL_BUDGET_USD` and `EVAL_THREADS`.
+
+`EVAL_BUDGET_USD` (default $10) is the most it may spend on LexChat in one day, London time, counted
+from the costs recorded in `responses.db`. A run expected to go over it is refused, and a gather stops
+starting new questions once it is reached. A model with no recorded cost yet needs `--first-run`.
+Only one run happens at a time. `LEX_EVAL_DB` moves the database, with the run log and lock beside it,
+off `lex_eval/data/`; the AWS container sets it to a volume (`deploy/README.md`). Exit codes: 0 the run completed, whatever the checks found; 1 it
+failed; 2 it was refused or stopped over money; 3 another run was in progress.
 
 ## Step 1 Check the active LLM
 
@@ -473,6 +503,7 @@ lex_eval/
 │   └── streamlit_report.py  # Streamlit dashboard
 ├── tests/                   # pytest evaluation suites
 ├── utils/                   # shared utilities (db, client, capture, judge)
+├── eval_run.py              # Steps 1 to 3 in one command
 ├── gather_responses.py      # Step 2 entry point
 ├── open_db_ui.py            # opens responses.db in browser UI
 └── run_evals.py             # Step 3 entry point
@@ -489,6 +520,7 @@ this work" and are kept up to date with the code:
 | [Reference answers](lex_eval/docs/reference-answers.md) | The reference ("gold") answer system: what is authored, what is generated. |
 | [Experiments](lex_eval/docs/experiments.md) | Running a gather as an experiment, scoring it, reading and comparing results. |
 | [Question set provenance](lex_eval/docs/question-set-provenance.md) | The fields recording where each question came from. |
+| [Installing on EC2](lex_eval/docs/deploy-ec2.md) | Installing and running the evaluation beside AILA on its EC2 instance, for cloud engineers. |
 | [Decisions](lex_eval/docs/decisions/) | Decision records for choices made or still open. |
 
 `lex_eval/docs/findings/` is the other shelf, for docs that answer "what did we find
@@ -513,7 +545,7 @@ Research showed that `google/gemini-2.5-flash-lite` was too weak for judge tasks
 | Reference Links | Are all reference links found by the researcher included in the final answer given to the user? A link counts by where it points, so a rewritten form (http or https, with or without /id/) or a link to a section of the same Act still counts. |
 | Citation Grounding | Does every Act cited in the researcher's report correspond to legislation the run's own tool calls actually retrieved, rather than one invented by the model. |
 | Citation Read | Did the researcher actually read every Act it cites? An Act whose text was pulled, or that the definitions or made-under tool listed, counts as read; one that only appeared as a title in a search results list does not. One named in a change record is not failed, but is listed. Catches a report making claims about a real, correctly linked source it never opened. |
-| Citation Domain | Does every citation link in the researcher's report point to a domain the Worker is permitted to cite. That is legislation.gov.uk for legislation only, caselaw.nationalarchives.gov.uk for case law only, and both for the hybrid mode, matching what each Worker prompt asks for. |
+| Citation Domain | Does every citation link in the researcher's report point to a domain the Worker is permitted to cite. That is legislation.gov.uk for legislation only, caselaw.nationalarchives.gov.uk or scotcourts.gov.uk for case law only, and all three for the hybrid mode, matching what each Worker prompt asks for. |
 | Genuine Gap | When retrieval found no usable legislation text, does the researcher's report say so plainly instead of answering with unsupported confidence. |
 | Step Completion | Deep research only. Did every step of the approved research plan carry its own retrieved legal text into its own report, rather than a step that retrieved text and then reported nothing (for example, hitting a tool-call budget limit mid-step). |
 | Report Integration | Deep research only, AI as a judge metric: For every step that reported a real, cited finding of its own, does the final answer reflect it, rather than dropping it when the Manager condenses several step reports into one response. |

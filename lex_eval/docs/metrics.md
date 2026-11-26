@@ -238,11 +238,13 @@ told it to cite.
 
 **How.** Deterministic, same no-partial-credit reasoning as Citation Grounding. No citation URLs scores
 1.0; any URL on a domain outside the permitted set scores 0.0; all inside it scores 1.0. The permitted
-set follows the research mode: legislation.gov.uk for `legislation_only`, and
-caselaw.nationalarchives.gov.uk alone for `case_law_only`, and both for `legislation_and_case_law`.
-Each set is exactly what that mode's Worker prompt permits: the case law prompt requires findings to
-be grounded "EXCLUSIVELY in case law" and never mentions legislation.gov.uk, while the hybrid prompt's
-citation protocol names both.
+set follows the research mode: legislation.gov.uk for `legislation_only`, the two judgment sites
+(caselaw.nationalarchives.gov.uk and scotcourts.gov.uk) for `case_law_only`, and all three for
+`legislation_and_case_law`. Each set is exactly what that mode's Worker prompt permits: the case law
+prompt requires findings to be grounded "EXCLUSIVELY in case law" and never mentions
+legislation.gov.uk, while the hybrid prompt's citation protocol names both kinds of source. A Scottish
+court's judgment, which LexChat searches by default from November 2026, is linked to its PDF on
+scotcourts.gov.uk.
 
 **Why it is mode-dependent.** A single legislation-only rule failed every case law response outright,
 for citing judgments in exactly the format it was told to use.

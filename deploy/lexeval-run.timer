@@ -1,0 +1,12 @@
+# Nightly evaluation run. Installed but not enabled; switch it on with:
+#   sudo systemctl enable --now lexeval-run.timer
+# Change the time with: sudo systemctl edit lexeval-run.timer
+[Unit]
+Description=lexchat-eval: nightly evaluation run of AILA
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 Europe/London
+Persistent=false
+
+[Install]
+WantedBy=timers.target

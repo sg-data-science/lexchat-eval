@@ -133,7 +133,7 @@ METRICS: list[tuple[str, str, str]] = [
     (
         "citation_domain",
         "Citation Domain",
-        "Does every citation link in the researcher's report point to a domain the Worker is permitted to cite. That is legislation.gov.uk for legislation only mode, caselaw.nationalarchives.gov.uk for case law only mode, and both for the hybrid mode, matching what each Worker prompt asks for.",
+        "Does every citation link in the researcher's report point to a domain the Worker is permitted to cite. That is legislation.gov.uk for legislation only mode, caselaw.nationalarchives.gov.uk or scotcourts.gov.uk for case law only mode, and all three for the hybrid mode, matching what each Worker prompt asks for.",
     ),
     (
         "genuine_gap",
@@ -1046,8 +1046,10 @@ def _render_chat_interaction(records: list[dict], identity: dict | None = None) 
                 if summarisation and summ_llm and summ_llm != main_llm:
                     st.markdown("**Summarisation:** Yes")
                     st.caption(f"Model: `{summ_llm}`")
-                elif summarisation:
+                elif summarisation and summ_llm:
                     st.markdown("**Summarisation:** Yes *(main model)*")
+                elif summarisation:
+                    st.markdown("**Summarisation:** Yes *(model not recorded)*")
                 else:
                     st.markdown("**Summarisation:** No")
             with cols[4]:

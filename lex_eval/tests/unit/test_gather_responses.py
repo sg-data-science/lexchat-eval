@@ -484,7 +484,7 @@ class TestCaptureKeysReachTheRecord:
         """The keys assigned in gather_responses' success-path result dict."""
         import re
 
-        start = source.index("if actual_output and not failure_phrase:")
+        start = source.index("if (actual_output and not failure_phrase) or refused:")
         end = source.index('"attempts": attempt,', start)
         return set(re.findall(r'"([a-z_]+)":', source[start:end]))
 
@@ -631,3 +631,62 @@ class TestTimedOutStreamIsRetried:
         result = self._run(client, retries=2)
         assert client.stream_calls == 2
         assert "stream timed out" in result["error"]
+
+
+class TestSpendCapRefusalIsNotRetried:
+    """LexChat refuses a request over a spending cap before the model call, so a
+    retry gets the same refusal. It is stored at once, named as a cap refusal,
+    with whatever the request had spent before the cap was reached."""
+
+    _CAP = (
+        "This request has been stopped because your daily allowance for the AI "
+        "service has been reached. Please try again later, or ask your "
+        "administrator if you need more."
+    )
+
+    class _CountingClient(_MockClient):
+        stream_calls = 0
+
+        def stream(self, method, url, **kwargs):
+            self.stream_calls += 1
+            return super().stream(method, url, **kwargs)
+
+    def _run(self, client, chat_mode="research"):
+        with (
+            patch(
+                "lex_eval.gather_responses.get_authenticated_client",
+                return_value=client,
+            ),
+            patch("lex_eval.gather_responses.time.sleep"),
+        ):
+            return process_question(
+                question_id=1,
+                question="q",
+                model_name="m",
+                research_mode="legislation_only",
+                summarisation_llm="m",
+                max_retries=3,
+                chat_mode=chat_mode,
+            )
+
+    def test_a_refused_answer_is_stored_once_with_its_cost(self):
+        refused = {
+            **AUDIT_ERROR_EMPTY_ANSWER,
+            "error": self._CAP,
+            "timings": {"total_ms": 900, "total_cost_usd": 0.42},
+        }
+        client = self._CountingClient(_sse_lines(refused))
+        result = self._run(client)
+        assert client.stream_calls == 1
+        assert result["error"] == "LexChat spend cap reached: " + self._CAP
+        assert result["total_cost_usd"] == 0.42
+
+    def test_a_refused_plan_is_not_retried(self):
+        client = _MockClient(
+            _sse_lines(AUDIT_SUCCESS),
+            plan_response={"detail": self._CAP},
+            plan_statuses=[503],
+        )
+        with pytest.raises(RuntimeError, match="^LexChat spend cap reached: "):
+            self._run(client, chat_mode="deep_research")
+        assert client.plan_calls == 1

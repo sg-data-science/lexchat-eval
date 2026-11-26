@@ -6,7 +6,7 @@ CitationPassthroughMetric: checks that Worker references reach the final respons
 CitationGroundingMetric:   checks that Worker citations were actually retrieved.
 CitationReadMetric:        checks that cited Acts had their text read, not just
                             their title seen in a search result.
-CitationDomainMetric:      checks that Worker citation URLs are on legislation.gov.uk.
+CitationDomainMetric:      checks that Worker citation URLs are on the domains its prompt permits.
 GenuineGapMetric:          checks that an empty retrieval is disclosed, not papered over.
 StepCompletionMetric:      checks that a step's own retrieval reached that step's own
                             report (deep research only).
@@ -632,6 +632,7 @@ def _is_plausible_legislation_id(identifier: str) -> bool:
 
 _LEGISLATION_DOMAIN = "legislation.gov.uk"
 _CASE_LAW_DOMAIN = "caselaw.nationalarchives.gov.uk"
+_SCOTTISH_CASE_LAW_DOMAIN = "scotcourts.gov.uk"
 
 # The domains each research mode's Worker system prompt tells it to cite
 # (LexChat/server_py/src/prompts.py, CITATION PROTOCOL in each Worker prompt).
@@ -644,10 +645,17 @@ _CASE_LAW_DOMAIN = "caselaw.nationalarchives.gov.uk"
 #                            legislation.gov.uk. Allowing it here would let a run
 #                            score 1.0 for citing a source its brief excluded.
 #   legislation_and_case_law both, since that prompt's protocol names both.
+# Case law in either mode also allows scotcourts.gov.uk: with Scottish
+# judgments on (LexChat's default from Nov 2026), the prompt tells the Worker
+# to cite a judgment from `scottish_results` by its scotcourts.gov.uk PDF url.
 _PERMITTED_DOMAINS = {
     "legislation_only": (_LEGISLATION_DOMAIN,),
-    "case_law_only": (_CASE_LAW_DOMAIN,),
-    "legislation_and_case_law": (_LEGISLATION_DOMAIN, _CASE_LAW_DOMAIN),
+    "case_law_only": (_CASE_LAW_DOMAIN, _SCOTTISH_CASE_LAW_DOMAIN),
+    "legislation_and_case_law": (
+        _LEGISLATION_DOMAIN,
+        _CASE_LAW_DOMAIN,
+        _SCOTTISH_CASE_LAW_DOMAIN,
+    ),
 }
 
 
@@ -1071,8 +1079,9 @@ class CitationDomainMetric(BaseMetric):
     its system prompt told it to cite.
 
     Which domains those are follows the research mode: legislation.gov.uk for
-    legislation_only, and caselaw.nationalarchives.gov.uk as well for the two
-    case law modes, whose prompts mandate that format for judgments.
+    legislation_only. The two case law modes allow judgments on
+    caselaw.nationalarchives.gov.uk and scotcourts.gov.uk, the two places
+    their prompts tell the Worker to link a judgment to.
 
     Score:
         0.0: no delegate_research call found; domains cannot be verified.

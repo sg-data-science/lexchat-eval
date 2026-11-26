@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import tempfile
 from datetime import datetime, timezone
@@ -79,7 +80,10 @@ import duckdb
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
-DEFAULT_DB = DATA_DIR / "responses.db"
+# LEX_EVAL_DB moves the database, and the run log and lock kept beside it, off
+# the data directory. The container sets it to a volume, so the question files
+# and reference answers built into the image stay read-only.
+DEFAULT_DB = Path(os.getenv("LEX_EVAL_DB") or DATA_DIR / "responses.db")
 
 _CREATE_TABLE = """
 CREATE SEQUENCE IF NOT EXISTS responses_id_seq START 1;
