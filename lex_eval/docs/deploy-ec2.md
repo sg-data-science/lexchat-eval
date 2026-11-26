@@ -2,7 +2,7 @@
 
 **For:** the cloud engineers who install and run AILA.
 
-**Not yet followed from start to finish.** The image, its commands and the dashboard passed a smoke test against a stand-in for AILA. No step here has been run on a real EC2 instance or against a real AILA. Section 10 lists what is untested.
+**Tried on WSL, not yet on EC2.** On 25 November 2026 this guide was followed on WSL against a real AILA (`v2026.11.9-21-g9302cdf`) in Docker, as far as a scored run, a backup and the dashboard. No step has been run on an EC2 instance. Section 10 lists what is untested.
 
 The design and its reasons are in [decisions/aws-deployment.md](decisions/aws-deployment.md). The files are listed in [`deploy/README.md`](../../deploy/README.md).
 
@@ -20,8 +20,8 @@ Use the AILA instance itself, with AILA's stack running.
 |---|---|
 | AILA | `v2026.11.9` or later |
 | Docker Compose | 2.24 or later: `sudo docker compose version` |
-| Memory | Up to 2 GB during a run, and up to 2 GB more while the dashboard is open. These are limits each container is held to, not measurements. |
-| Disk | **Not measured yet.** The trial install will give the image size and the growth per run. Estimated growth is 15 MB for each default run, and 10 MB for each deep-research answer. |
+| Memory | Up to 2 GB during a run, and up to 2 GB more while the dashboard is open. These are limits each container is held to. On the trial, the dashboard used about 200 MB in light use. A run's peak was not measured. |
+| Disk | The image is 850 MB. On the trial, the results took 43 MB after 13 answers. That is more than the estimate of 15 MB for each default run of 24 answers, though part of it is the database's fixed size. The growth of a full run is not measured yet. |
 
 **Inbound:** nothing. No port is published. The dashboard is reached through a tunnel (section 7.5).
 
@@ -183,6 +183,8 @@ ok: LexChat v2026.11.10, model <model>, summarisation model <model>; OpenRouter 
 
 Do not start a run until this prints the line above. `run` itself does not test OpenRouter first, so with it blocked a run would pay AILA for answers it could not fully score.
 
+**Check it names the model you mean to evaluate.** `check` passes with any model, and a new AILA starts on its own default (`deepseek-v3.2:cloud` on the trial). To change it, an AILA admin opens Admin Portal, Developer, chooses both models on the provider's card, clicks **Save Settings**, then **Set as Active**. The provider needs its own API key on that card. The key in this tool's settings file is for scoring only.
+
 ## 5. First run
 
 See what it will do. This asks AILA no questions:
@@ -198,7 +200,7 @@ $C run -d --name lexeval-first eval run --first-run
 sudo docker logs -f lexeval-first          # Ctrl+C stops watching, not the run
 ```
 
-It asks 12 questions twice. Expect about 15 minutes and about $5 in total (section 8). Both are estimates from earlier runs on a developer's machine.
+It asks 12 questions twice. Expect about 15 minutes and about $5 in total (section 8). Both are estimates from earlier runs on a developer's machine, with AILA using Sonnet 5.5 through OpenRouter. On the trial, set up the same way, four questions twice cost $0.76 on AILA. Bedrock prices differ.
 
 When it finishes, read its exit code and remove the container:
 
@@ -444,16 +446,16 @@ It does not:
 
 **Tested** by the smoke test, on WSL with a stand-in for AILA: the build, the non-root user and read-only filesystem, `check`, `run` and `backup`, the four exit codes, the dashboard, and that the timer's time is valid. The OpenRouter part of `check` and the steps of the restore command were tested outside a container.
 
+**Tested** on the WSL trial, against a real AILA in Docker behind its own nginx: the browser command in section 2.3, `check`, a background run scored from inside the container, `backup`, and the dashboard, reached through a local port forwarder rather than a tunnel.
+
 **Not tested:**
-- a real EC2 instance, and a real AILA behind its own nginx;
-- scoring with a language model from inside the container;
-- the browser command in section 2.3, which was written from AILA's code;
+- a real EC2 instance;
 - the deploy key, clone and file-permission steps in section 3.1;
-- the background run in section 5, and the systemd service and timer running;
+- the systemd service and timer running;
 - updating, rolling back, restoring inside the container, stopping a run, and removing it all;
 - both dashboard tunnels;
 - a forward proxy or a TLS-inspecting proxy, and the real allow-list;
-- disk and memory use.
+- a run's peak memory, and the time, cost and disk growth of a full default run.
 
 Section 8's costs and section 5's time come from runs on a developer's machine.
 

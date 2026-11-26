@@ -1,7 +1,7 @@
 # Running the evaluation on AILA's EC2 instance
 
 *Decision record, 23 November 2026. Status: decisions D1 to D6 agreed 23 November 2026.
-Steps 1 to 5 are written; the trial install is not done. Checked against AILA (LexChat) `main` at v2026.11.9 plus its unreleased
+Steps 1 to 5 are written; the trial install (step 6) ran on WSL on 25 November 2026, not yet on EC2. Checked against AILA (LexChat) `main` at v2026.11.9 plus its unreleased
 changes, and against this repo at the start of the `aws-migration` branch.*
 
 ## What this proposes
@@ -219,7 +219,7 @@ one command that switches it on, and changing the time is one `systemctl edit`.
 
 The stored text per answer averages about 10 MB for deep research and 0.7 MB for conversational, so the
 nightly conversational run adds roughly 15 MB and a deep-research run roughly 120 MB. That is an
-estimate from text length; the real figure on disk is measured during the trial install. A `backup`
+estimate from text length; the trial install found more on disk, so the install guide (section 2.1) gives what it measured. A `backup`
 command takes the lock, copies the database to a dated file on the backups volume and keeps the newest
 seven. The existing `--compact` reclaims space after a deletion.
 
